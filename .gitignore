@@ -1,0 +1,6 @@
+node_modules/
+.provenant/
+*.log
+.DS_Store
+scratch/
+_video/
