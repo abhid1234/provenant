@@ -303,6 +303,8 @@
         <button class="tab" role="tab" aria-selected="false" data-tab="verify"><span class="num">03</span>Verify</button>
         <button class="tab" role="tab" aria-selected="false" data-tab="coverage"><span class="num">04</span>Coverage</button>
         <button class="tab" role="tab" aria-selected="false" data-tab="tamper"><span class="num">05</span>Tamper &amp; Revoke</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="otel"><span class="num">06</span>OTel</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="sign"><span class="num">07</span>Sign</button>
       </div>
 
       <!-- 01 ATTEST -->
@@ -432,6 +434,54 @@
           <div class="vbody mono" id="tBody"></div>
         </div>
       </div>
+
+      <!-- 06 OTEL -->
+      <div class="panel" id="p-otel" role="tabpanel">
+        <p class="desc">Map attestations to <b>OpenTelemetry span attributes</b> — attach to any span (Arize / LangSmith / Braintrust…). The real <code>attestationToSpanAttributes(record)</code> and <code>coverageToSpanAttributes(coverage(…))</code> project each record and the coverage report onto a <b>flat</b> <code>provenant.*</code> / <code>provenant.coverage.*</code> key namespace — scalar values only, so an agent can decorate the span it's already emitting with "which agent produced which artifact, why, and is it still attested" with no nesting and no I/O.</p>
+        <div class="finger" style="margin-top:0;margin-bottom:16px">
+          <div class="flab"><svg width="15" height="15" style="color:var(--gold)"><use href="#ic-term" width="15" height="15"/></svg> coverageToSpanAttributes(coverage(hashes, ledger))</div>
+          <pre class="mono" id="otelCov" style="margin:6px 0 0;font-size:12px;line-height:1.7;color:var(--gold2);white-space:pre-wrap;word-break:break-all;overflow-x:auto;">…</pre>
+        </div>
+        <div id="otelRecs"></div>
+        <p class="csub" style="margin:14px 0 0"><b style="color:var(--ink)">Deterministic and zero-dependency.</b> No clock, no crypto, no filesystem — a record in, a flat attribute object out. Arrays are joined to comma strings and revocation context appears only on a revoked record, so every emitted value is a bare scalar an exporter can ship as-is.</p>
+      </div>
+
+      <!-- 07 SIGN -->
+      <div class="panel" id="p-sign" role="tabpanel">
+        <p class="desc">Cross-org tamper-evidence with <b>ed25519</b>. The author signs a record with a private key nobody else holds; anyone verifies with the matching public key — no shared secret. The signature covers provenant's <em>real</em> canonical pre-image: the same <code>canonicalize()</code> the content-hash <code>id</code> uses (id dropped, <code>signature</code> excluded). Pick an attestation, generate a keypair, and sign it.</p>
+        <div class="grid2">
+          <div>
+            <label class="fl">attestation to sign</label>
+            <select class="f" id="sSel"></select>
+            <div class="finger">
+              <div class="flab"><svg width="15" height="15" style="color:var(--gold)"><use href="#ic-doc" width="15" height="15"/></svg> canonical pre-image · canonicalize(record) <span id="sTampTag" style="color:var(--bad);display:none">· tampered</span></div>
+              <pre class="mono" id="sPre" style="margin:6px 0 0;font-size:11.5px;line-height:1.6;color:var(--gold2);white-space:pre-wrap;word-break:break-all;max-height:150px;overflow:auto;">…</pre>
+            </div>
+            <div class="btnrow">
+              <button class="btn" id="sSignBtn"><svg width="14" height="14"><use href="#ic-finger" width="14" height="14"/></svg> Generate keypair &amp; sign</button>
+            </div>
+          </div>
+          <div>
+            <div class="finger" style="margin-top:0">
+              <div class="flab"><svg width="15" height="15" style="color:var(--gold)"><use href="#ic-finger" width="15" height="15"/></svg> ed25519 public-key fingerprint</div>
+              <div class="hash mono" id="sPub">— no keypair yet —</div>
+            </div>
+            <div class="finger">
+              <div class="flab"><svg width="15" height="15" style="color:var(--gold)"><use href="#ic-link" width="15" height="15"/></svg> detached signature · ed25519(hex)</div>
+              <div class="hash mono" id="sSig" style="font-size:11.5px">— nothing signed yet —</div>
+            </div>
+            <div class="btnrow">
+              <button class="btn ghost" id="sVerifyBtn" disabled><svg width="14" height="14"><use href="#ic-check" width="14" height="14"/></svg> Verify</button>
+              <button class="btn danger" id="sTamperBtn" disabled><svg width="14" height="14"><use href="#ic-x" width="14" height="14"/></svg> Tamper a field</button>
+            </div>
+          </div>
+        </div>
+        <div class="vresult" id="sResult">
+          <div class="vhead" id="sHead"></div>
+          <div class="vbody mono" id="sBody"></div>
+        </div>
+        <p class="csub" id="sNote" style="margin:16px 0 0"><b style="color:var(--ink)">Honest demo.</b> The canonicalization is provenant's real code (<code>site/lib/id.js</code>, verbatim from <code>registry.js</code>); the signature is a standard <code>crypto.subtle</code> ed25519 over those exact bytes — your own verifier can check it offline. (The library's <code>src/sign-asym.js</code> uses Node's <code>crypto</code>; here the browser's native Ed25519 produces the same standard signature over the same canonical form.)</p>
+      </div>
     </div>
 
     <!-- shared live ledger -->
@@ -536,7 +586,8 @@ npx @avee1234/provenant hook install
 <script type="module">
 import { verify, chainOf, coverage } from './lib/verify.js';
 import { validateAttestation } from './lib/schema.js';
-import { attest, revoke, resolveRecords, computeHash, shortId } from './lib/id.js';
+import { attest, revoke, resolveRecords, computeHash, shortId, canonicalize } from './lib/id.js';
+import { attestationToSpanAttributes, coverageToSpanAttributes } from './lib/otel.js';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -612,6 +663,8 @@ async function render(){
   renderParentSelect();
   await renderCoverage();                          // <-- REAL coverage() + verify()
   await refreshChain();                            // <-- REAL chainOf()
+  renderOtel();                                    // <-- REAL span-attribute mappers
+  renderSignSelect();                              // <-- ed25519 sign tab
   justStamped = null; newLine = -1;
 }
 
@@ -689,6 +742,130 @@ function renderRevokeSelect(){
   const live = RESOLVED.filter(a=>!a.revoked);
   $('rSel').innerHTML = live.map(a=>`<option value="${a.id}">${shortId(a.id)} · ${esc(a.intent)}</option>`).join('')
     || '<option value="">— nothing live to revoke —</option>';
+}
+
+// ---- OTel span attributes (tab 06) ----
+function attrTable(attrs){
+  const rows = Object.entries(attrs).map(([k,v])=>{
+    const val = typeof v==='string' ? `"${esc(v)}"` : String(v);
+    const col = typeof v==='boolean' ? (v?'var(--good)':'var(--bad)') : 'var(--gold2)';
+    return `<div class="lline"><span class="k">${esc(k)}</span> <span style="color:${col}">${val}</span></div>`;
+  }).join('');
+  return `<div class="ledger" style="max-height:none">${rows}</div>`;
+}
+function renderOtel(){
+  // coverage report → provenant.coverage.* (REAL coverageToSpanAttributes)
+  const cov = coverage(artifacts.map(a=>a.hash), RESOLVED);
+  const covAttrs = coverageToSpanAttributes(cov);
+  $('otelCov').textContent = JSON.stringify(covAttrs, null, 2);
+  // each attestation → provenant.* (REAL attestationToSpanAttributes)
+  const el = $('otelRecs');
+  if(RESOLVED.length===0){ el.innerHTML = '<div class="ledger-empty">— no attestations —</div>'; return; }
+  el.innerHTML = RESOLVED.map(r=>{
+    const attrs = attestationToSpanAttributes(r);   // <-- REAL mapper
+    return `<div style="margin-top:14px">
+      <div class="flab" style="font-family:var(--mono);font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--faint);margin-bottom:7px;display:flex;align-items:center;gap:8px">
+        <svg width="15" height="15" style="color:${r.revoked?'#e05a4c':'var(--gold)'}"><use href="#ic-doc" width="15" height="15"/></svg>
+        attestationToSpanAttributes(${shortId(r.id)})${r.revoked?' · revoked':''}
+      </div>${attrTable(attrs)}</div>`;
+  }).join('');
+}
+
+// ---- ed25519 signing (tab 07) — real canonical pre-image, native crypto.subtle ----
+const ED25519_OK = !!(crypto.subtle && crypto.subtle.generateKey);
+const toHex = bytes => [...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,'0')).join('');
+const signState = { kp:null, pubHex:'', fpr:'', record:null, original:null, sigBytes:null, tampered:false };
+
+function signPreimage(record){
+  // provenant's REAL canonical pre-image: canonicalize() drops `id`; `signature`
+  // is excluded — the exact bytes src/sign-asym.js signs (here as UTF-8).
+  const { signature:_s, ...rest } = record;
+  return new TextEncoder().encode(canonicalize(rest));
+}
+function currentSignRecord(){
+  const id = $('sSel').value;
+  return rawLedger.find(r=>r.id===id && r.type!=='revocation') || RESOLVED.find(r=>r.id===id) || null;
+}
+function refreshSignPre(){
+  const rec = signState.record || currentSignRecord();
+  if(!rec){ $('sPre').textContent = '— no attestation —'; return; }
+  const { signature:_s, ...rest } = rec;   // signature excluded; canonicalize() drops id
+  $('sPre').textContent = canonicalize(rest);
+}
+function renderSignSelect(){
+  const prev = $('sSel').value;
+  const opts = RESOLVED.filter(r=>!r.revoked).map(r=>`<option value="${r.id}">${shortId(r.id)} · ${esc(r.intent)}</option>`);
+  $('sSel').innerHTML = opts.join('') || '<option value="">— no live attestations —</option>';
+  if([...$('sSel').options].some(o=>o.value===prev)) $('sSel').value = prev;
+  if(!signState.record) refreshSignPre();
+}
+function resetSign(){
+  signState.record=null; signState.original=null; signState.sigBytes=null; signState.tampered=false;
+  $('sSig').textContent = '— nothing signed yet —';
+  $('sVerifyBtn').disabled = true; $('sTamperBtn').disabled = true;
+  $('sTampTag').style.display = 'none';
+  $('sResult').className = 'vresult';
+  refreshSignPre();
+}
+async function doSign(){
+  if(!ED25519_OK){ signFallback(); return; }
+  const rec = currentSignRecord();
+  if(!rec) return;
+  let kp;
+  try{
+    kp = await crypto.subtle.generateKey({ name:'Ed25519' }, true, ['sign','verify']);
+  }catch(e){ signFallback(); return; }
+  const rawPub = await crypto.subtle.exportKey('raw', kp.publicKey);
+  const pubHex = toHex(rawPub);
+  const fprBuf = await crypto.subtle.digest('SHA-256', rawPub);
+  const fpr = toHex(fprBuf).slice(0,32).replace(/(..)(?=(..)*$)/g,'$1:'); // colon-grouped
+  signState.kp = kp; signState.pubHex = pubHex; signState.fpr = fpr;
+  signState.record = { ...rec }; signState.original = { ...rec }; signState.tampered = false;
+  const sig = await crypto.subtle.sign({ name:'Ed25519' }, kp.privateKey, signPreimage(signState.record));
+  signState.sigBytes = sig;
+  $('sPub').innerHTML = `${fpr}<br><span style="color:var(--faint)">SHA-256 of the raw ed25519 public key · full pub ${shortId(pubHex)}…</span>`;
+  $('sSig').textContent = toHex(sig);
+  $('sTampTag').style.display = 'none';
+  $('sVerifyBtn').disabled = false; $('sTamperBtn').disabled = false;
+  refreshSignPre();
+  await doSignVerify();
+}
+async function doSignVerify(){
+  if(!signState.kp || !signState.sigBytes) return;
+  const ok = await crypto.subtle.verify({ name:'Ed25519' }, signState.kp.publicKey, signState.sigBytes, signPreimage(signState.record));
+  const box=$('sResult'), head=$('sHead'), body=$('sBody');
+  box.className = 'vresult show ' + (ok?'ok':'rev');
+  if(ok){
+    head.innerHTML = sealSVG(false,34)+' ATTESTED-BY-KEY';
+    body.innerHTML = `record <span class="gd">${shortId(signState.record.id)}</span> · intent <span class="g">"${esc(signState.record.intent)}"</span><br>`+
+      `the ed25519 signature <span class="gd">${shortId(toHex(signState.sigBytes))}…</span> verifies against the canonical pre-image under public key <span class="gd">${shortId(signState.pubHex)}…</span><br>`+
+      `<span class="g">✓ this key produced this record</span> — checkable offline by anyone holding the public key, no shared secret.`;
+  } else {
+    head.innerHTML = `<svg width="30" height="30" style="color:var(--bad)"><use href="#ic-x" width="26" height="26" x="2" y="2"/></svg> SIGNATURE INVALID`;
+    body.innerHTML = `the record's <span class="r">canonical pre-image changed</span> since it was signed — a field was tampered.<br>`+
+      `the ed25519 signature no longer verifies under the public key. <span class="r">✗ tamper detected</span>, from the signature alone.`;
+  }
+}
+function doSignTamper(){
+  if(!signState.record) return;
+  if(!signState.tampered){
+    signState.record = { ...signState.original, intent: signState.original.intent + ' [TAMPERED]' };
+    signState.tampered = true;
+    $('sTampTag').style.display = '';
+    $('sTamperBtn').innerHTML = '<svg width="14" height="14"><use href="#ic-check" width="14" height="14"/></svg> Restore field';
+  } else {
+    signState.record = { ...signState.original };
+    signState.tampered = false;
+    $('sTampTag').style.display = 'none';
+    $('sTamperBtn').innerHTML = '<svg width="14" height="14"><use href="#ic-x" width="14" height="14"/></svg> Tamper a field';
+  }
+  refreshSignPre();
+  doSignVerify();
+}
+function signFallback(){
+  $('sPub').innerHTML = '<span style="color:var(--bad)">native Ed25519 unavailable in this browser</span>';
+  $('sSig').innerHTML = '<span style="color:var(--faint)">crypto.subtle Ed25519 is required (Chrome 137+, Safari 17+). The canonicalization above is still provenant\'s real code; the library\'s src/sign-asym.js signs the same bytes with Node crypto offline.</span>';
+  $('sVerifyBtn').disabled = true; $('sTamperBtn').disabled = true;
 }
 
 // ---- chain ----
@@ -887,6 +1064,11 @@ $('tSel').addEventListener('change', async ()=>{
 });
 $('tamperBtn').addEventListener('click', doTamper);
 $('rBtn').addEventListener('click', doRevoke);
+$('sSel').addEventListener('change', resetSign);
+$('sSignBtn').addEventListener('click', doSign);
+$('sVerifyBtn').addEventListener('click', doSignVerify);
+$('sTamperBtn').addEventListener('click', doSignTamper);
+if(!ED25519_OK) signFallback();
 
 await seed();
 await updateAttestFinger();
