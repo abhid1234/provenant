@@ -53,12 +53,13 @@ Zero-dependency ESM. `import { … } from "@avee1234/provenant"`. Every function
 
 **Schema & validation** — never throw; each returns `{ valid, errors }` collecting *every* violation.
 - `validateAttestation(obj)` / `validateRevocation(obj)` / `validateLedger(arr)`
+- `validateEvaluation(evaluation)` — the optional evaluation claim (`{ score, method, checks?, evaluator? }`)
 - `isSha256Hex(s)`, `isIso8601Utc(s)` — the two format primitives
-- `ATTESTATION_FIELDS`, `REVOCATION_FIELDS`, `RECORD_TYPES`, `ERROR_CODES`
+- `ATTESTATION_FIELDS`, `REVOCATION_FIELDS`, `EVALUATION_FIELDS`, `EVAL_METHODS`, `RECORD_TYPES`, `ERROR_CODES`
 
 **Hash & construct** — pure record constructors (throw on bad input rather than emit a malformed record).
 - `computeHash(content)` → the sha256 hex of a string/Buffer (the artifact fingerprint)
-- `attest(content, { agent, intent, parents, created, meta })` → an attestation record. `content` is a string/Buffer (hashed here) or `{ hash }` (a pre-computed digest).
+- `attest(content, { agent, intent, parents, created, meta, evaluation })` → an attestation record. `content` is a string/Buffer (hashed here) or `{ hash }` (a pre-computed digest). The optional `evaluation` is validated and folded into the hashed content.
 - `revoke(attestationId, { agent, reason, at })` → a revocation record
 - `computeRecordId(record)` / `canonicalize(record)` — the content-hash id primitives
 
@@ -74,6 +75,10 @@ Zero-dependency ESM. `import { … } from "@avee1234/provenant"`. Every function
 - `chainOf(attestationId, attestations)` → the ordered provenance chain (record + ancestors via `parents`, deduped and cycle-safe)
 - `coverage(artifactHashes, attestations)` → `{ score, total, attested, unattested, revoked }`
 
+**Evaluation & confidence** *(the attested-quality-claim query layer)*
+- `evalOf(artifactHash, attestations)` → the live evaluation claim `{ score, method, checks, evaluator, agent }` (latest non-revoked attestation carrying an `evaluation`), or `null`
+- `evalCoverage(artifactHashes, attestations, { threshold? })` → the confidence audit `{ evaluated, unevaluated, mean_score, min_score, below }` — which outputs are low-confidence or unevaluated
+
 **Sign** *(optional HMAC tamper-evidence — shared secret)*
 - `sign(record, secret)` → HMAC-sha256 hex over the record's canonical pre-image
 - `verifySignature(record, secret)` → constant-time boolean
@@ -84,7 +89,7 @@ Zero-dependency ESM. `import { … } from "@avee1234/provenant"`. Every function
 - `verifyAsym(record, publicKeyPem, signatureHex?)` → boolean; pass `signatureHex` (detached) or omit it to verify the record's own `signature` (embedded). Never throws — a bad key/signature is `false`.
 
 **OpenTelemetry** *(pure record → span-attribute bridge)*
-- `attestationToSpanAttributes(record)` → a FLAT `provenant.*` attribute object (scalars only; `parents` joined to a comma string, plus `parent_count`, `revoked`, `signed`)
+- `attestationToSpanAttributes(record)` → a FLAT `provenant.*` attribute object (scalars only; `parents` joined to a comma string, plus `parent_count`, `revoked`, `signed`, and `eval.*` when an evaluation is present)
 - `coverageToSpanAttributes(report)` → a FLAT `provenant.coverage.*` attribute object from a `coverage()` result
 
 **Git adapter** *(the dogfood surface)*
@@ -93,10 +98,13 @@ Zero-dependency ESM. `import { … } from "@avee1234/provenant"`. Every function
 ## CLI
 
 ```bash
-provenant attest <file> --intent "<why>" [--agent <id>] [--parents <ids>] [--ledger <path>] [--json]
+provenant attest <file> --intent "<why>" [--agent <id>] [--parents <ids>]
+                        [--eval-score <0..1> --eval-method <m>] [--eval-check <name:pass> ...] [--ledger <path>] [--json]
 provenant verify <file-or-hash> [--ledger <path>] [--json]
 provenant chain <attestation-id> [--ledger <path>] [--json]
 provenant coverage <path...> [--ledger <path>] [--json]
+provenant eval <file-or-hash> [--ledger <path>] [--json]
+provenant confidence <path...> [--threshold <0..1>] [--ledger <path>] [--json]
 provenant log [--all] [--agent <id>] [--ledger <path>] [--json]
 provenant revoke <attestation-id> --reason "<why>" [--agent <id>] [--ledger <path>] [--json]
 provenant hook install [--ledger <path>]
@@ -104,10 +112,12 @@ provenant hook run [--agent <id>] [--ledger <path>] [--json]
 provenant otel <ledger-file> [--coverage <path...>]
 ```
 
-- **`attest <file>`** — hash the file's content and append an attestation: which agent produced it, why, and what it derives from. The record is validated before it's written. Exit `0` on write.
+- **`attest <file>`** — hash the file's content and append an attestation: which agent produced it, why, and what it derives from. The record is validated before it's written. Exit `0` on write. With `--eval-score` + `--eval-method` (and optional repeatable `--eval-check name:pass|fail`), the attestation also carries an **evaluation** — an attested claim about the artifact's quality/confidence, folded into the content hash so it can't be silently edited.
 - **`verify <file-or-hash>`** — is the artifact (a file, hashed here, or a raw sha256 digest) attested? Exit `0` if a live attestation exists, `1` if unattested or revoked.
 - **`chain <id>`** — print the provenance chain of an attestation (the record and every ancestor via `parents`). Accepts a full id or an unambiguous prefix. Exit `1` if the id is unknown.
 - **`coverage <path...>`** — audit what fraction of the given files carry a live attestation. Exit `0` when all are attested, `1` when any is unattested or revoked.
+- **`eval <file-or-hash>`** — print the live evaluation claim for an artifact (score, method, checks, evaluator, agent). Exit `0` if a claim exists, `1` if none.
+- **`confidence <path...>`** — the confidence audit: which of the given files are low-confidence or unevaluated? Reports evaluated/unevaluated counts, mean + min score, and (with `--threshold`) the files scoring below it. Exit `0` when all are evaluated and none is below the threshold, `1` otherwise.
 - **`log`** — list the ledger's live attestations (who produced what, why, from what). `--all` also shows revoked ones, labeled; `--agent` filters to one producer.
 - **`revoke <id> --reason`** — supersede an attestation by appending a revocation. A no-op with a note if it is already revoked (still exit `0`).
 - **`hook install` / `hook run`** — install a **git post-commit hook** that attests every file a commit changed, chaining each new version to the previous attestation of the same path. Post-commit (not pre-commit) is deliberate: provenance records what *did* happen, and the hook only ever appends — it never blocks or alters a commit. Install is idempotent and preserves any existing hook (it manages only a marked block).
@@ -119,9 +129,50 @@ Common flags: `--agent <id>` (or `PROVENANT_AGENT`), `--ledger <path>` (or `PROV
 
 The store is an **append-only JSONL file** (default `.provenant/ledger.jsonl`), meant to be **committed** so the provenance trail travels with the repo across worktrees and harnesses. New records are appended as whole lines; existing lines are never rewritten. Every record's `id` is a content hash of its own content, so a duplicated append is idempotent on read and two agents appending at once union-merge cleanly instead of conflicting. A line that fails its integrity check (its `id` no longer matches its content — i.e. it was tampered) or won't parse is skipped with a note surfaced to stderr — one bad line never discards the rest of the ledger.
 
+## Evaluation / confidence claims
+
+provenant records not just *who* made an artifact but an attested, verifiable **claim about its quality**. An attestation can carry an optional `evaluation` — a portable, content-addressed assertion of the artifact's confidence/quality score and *how it was judged*:
+
+```json
+{
+  "id": "…", "type": "attestation",
+  "agent": "claude-opus-4-8/claude-code",
+  "artifact": "b94d27b9…",
+  "intent": "add OAuth login flow",
+  "created": "2026-07-11T12:00:00Z",
+  "evaluation": {
+    "score": 0.9,
+    "method": "test",
+    "checks": [
+      { "name": "unit-tests", "passed": true },
+      { "name": "typecheck", "passed": true, "note": "no errors" }
+    ],
+    "evaluator": "vitest@2"
+  }
+}
+```
+
+- `score` — the claimed quality/confidence, a number in `[0, 1]`.
+- `method` — **how** it was judged: `self` | `test` | `judge` | `human` | any bespoke evaluator name (the well-known set is `EVAL_METHODS`; any non-empty string is allowed).
+- `checks` *(optional)* — named boolean sub-checks `{ name, passed, note? }` — the receipts behind the score.
+- `evaluator` *(optional)* — who/what produced the judgement.
+
+Because the `evaluation` is part of the **canonical record content**, the content-hash `id` (and any HMAC/ed25519 signature) *cover it* — the score can't be silently edited: rewrite a `0.9` to `0.1` and the record no longer matches its own `id`, so it's dropped on read, and any signature fails. An attestation with no `evaluation` behaves exactly as before this feature (byte-for-byte identical record, same `id`) — the addition is fully backward-compatible.
+
+**This is an attested *claim*, not runtime verification.** provenant does not re-execute the artifact or check the score against reality — it records "this agent *asserts* this artifact scores 0.9 by method=test, and here are the checks", tamper-evidently, alongside the provenance. That makes evaluation scores auditable across a repo the way coverage is — distinct from a runtime outcome-verification sibling that would actually re-run the work.
+
+```bash
+provenant attest src/auth.js --intent "add OAuth" \
+  --eval-score 0.9 --eval-method test --eval-check unit:pass --eval-check lint:fail   # attest WITH a quality claim
+provenant eval src/auth.js                          # what is the live evaluation claim? (score, method, checks)
+provenant confidence src/**/*.js --threshold 0.8    # which outputs are low-confidence / unevaluated?
+```
+
+`evalOf(artifactHash, attestations)` returns the live claim (latest non-revoked evaluation), and `evalCoverage(hashes, attestations, { threshold })` returns `{ evaluated, unevaluated, mean_score, min_score, below }` — the fleet-wide "which agent outputs are below the bar, or carry no quality claim at all?" audit. Both are pure, offline, and zero-dep. Harness-neutral: Claude Code, Codex, Cursor, Google Antigravity, or a factory worker can all attach a score to what they produce.
+
 ## OpenTelemetry
 
-provenant projects records onto **span attributes** so provenance rides along with the traces an agent fleet already emits. `attestationToSpanAttributes(record)` returns a **flat** `provenant.*` object — `provenant.agent`, `provenant.artifact`, `provenant.intent`, `provenant.parents` (the ids joined to a comma string) with `provenant.parent_count`, `provenant.created`, and the `provenant.revoked` / `provenant.signed` booleans — values are only strings, numbers, and booleans, so any exporter accepts them with no nesting. `coverageToSpanAttributes(coverage(…))` does the same for a repo audit under `provenant.coverage.*`. Both are pure and deterministic; `provenant otel <ledger>` prints them as JSON. Same bridge convention as the rest of the family (constraintguard's `cg otel`).
+provenant projects records onto **span attributes** so provenance rides along with the traces an agent fleet already emits. `attestationToSpanAttributes(record)` returns a **flat** `provenant.*` object — `provenant.agent`, `provenant.artifact`, `provenant.intent`, `provenant.parents` (the ids joined to a comma string) with `provenant.parent_count`, `provenant.created`, and the `provenant.revoked` / `provenant.signed` booleans — values are only strings, numbers, and booleans, so any exporter accepts them with no nesting. When a record carries an evaluation, `provenant.eval.score` / `provenant.eval.method` / `provenant.eval.checks_passed` (and `provenant.eval.evaluator` when present) are emitted too, so the attested confidence rides along on the span. `coverageToSpanAttributes(coverage(…))` does the same for a repo audit under `provenant.coverage.*`. Both are pure and deterministic; `provenant otel <ledger>` prints them as JSON. Same bridge convention as the rest of the family (constraintguard's `cg otel`).
 
 ## ed25519 signatures
 
@@ -136,4 +187,4 @@ npx @avee1234/provenant attest …     # CLI, no install
 
 Requires Node ≥ 18. Run the test suite with `node --test`.
 
-Status: **v0.2** — see [`roadmap.md`](roadmap.md). MIT · zero dependencies · harness-neutral.
+Status: **v0.3** — see [`roadmap.md`](roadmap.md). MIT · zero dependencies · harness-neutral.

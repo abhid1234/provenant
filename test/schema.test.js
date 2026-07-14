@@ -64,6 +64,7 @@ test("ATTESTATION_FIELDS + REVOCATION_FIELDS are the canonical field sets", () =
     "parents",
     "created",
     "meta",
+    "evaluation",
     "signature",
   ]);
   assert.deepEqual(REVOCATION_FIELDS, [
@@ -89,6 +90,7 @@ test("ERROR_CODES exposes every stable code", () => {
     "INVALID_SHA256",
     "INVALID_SIGNATURE",
     "DUPLICATE_ID",
+    "OUT_OF_RANGE",
   ]) {
     assert.equal(ERROR_CODES[code], code, `ERROR_CODES.${code}`);
   }

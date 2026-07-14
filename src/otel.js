@@ -39,6 +39,17 @@ function joinAttr(values) {
 // keys are omitted entirely on a live record so the shape stays honest. Any
 // scalar `meta.*` value is flattened under `provenant.meta.<key>` — nested or
 // array meta values are skipped, keeping every emitted value a bare scalar.
+//
+// When the record carries an `evaluation`, its claim is projected onto flat
+// scalars too, so a span shows the attested confidence at a glance:
+//
+//   - provenant.eval.score         — the claimed score in [0, 1] (number)
+//   - provenant.eval.method        — how it was judged (string)
+//   - provenant.eval.checks_passed — how many `checks[]` entries passed (number)
+//   - provenant.eval.evaluator     — who/what evaluated, when present (string)
+//
+// Those keys are omitted entirely on a record with no evaluation, keeping the
+// shape honest.
 export function attestationToSpanAttributes(record) {
   const r = record || {};
   const parents = Array.isArray(r.parents) ? r.parents : [];
@@ -66,6 +77,19 @@ export function attestationToSpanAttributes(record) {
       if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
         attrs[`provenant.meta.${k}`] = v;
       }
+    }
+  }
+
+  const e = r.evaluation;
+  if (e !== null && typeof e === "object" && !Array.isArray(e)) {
+    attrs["provenant.eval.score"] = e.score;
+    attrs["provenant.eval.method"] = e.method;
+    const checks = Array.isArray(e.checks) ? e.checks : [];
+    attrs["provenant.eval.checks_passed"] = checks.filter(
+      (c) => c && c.passed === true
+    ).length;
+    if (typeof e.evaluator === "string" && e.evaluator.length > 0) {
+      attrs["provenant.eval.evaluator"] = e.evaluator;
     }
   }
 

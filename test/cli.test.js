@@ -287,6 +287,144 @@ test("coverage: an unreadable file → error, exit 1", () => {
   assert.match(r.stderr, /cannot read file/);
 });
 
+// --- attest --eval / eval / confidence -------------------------------------
+
+test("attest --eval-score/--eval-method: carries the evaluation into the record", () => {
+  const ledger = join(dir, "eval-attest.jsonl");
+  const f = file("e1.txt", "graded content");
+  const r = run([
+    "attest", f, "--intent", "w", "--agent", "a1", "--ledger", ledger,
+    "--eval-score", "0.9", "--eval-method", "test",
+    "--eval-check", "unit:pass", "--eval-check", "lint:fail",
+    "--eval-evaluator", "vitest", "--json",
+  ]);
+  assert.equal(r.status, 0, r.stderr);
+  const rec = JSON.parse(r.stdout);
+  assert.equal(validateAttestation(rec).valid, true);
+  assert.deepEqual(rec.evaluation, {
+    score: 0.9,
+    method: "test",
+    checks: [
+      { name: "unit", passed: true },
+      { name: "lint", passed: false },
+    ],
+    evaluator: "vitest",
+  });
+});
+
+test("attest: an out-of-range --eval-score → error, exit 1, nothing written", () => {
+  const ledger = join(dir, "eval-bad-score.jsonl");
+  const f = file("e2.txt", "x");
+  const r = run([
+    "attest", f, "--intent", "w", "--agent", "a1", "--ledger", ledger,
+    "--eval-score", "1.5", "--eval-method", "test",
+  ]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /evaluation is invalid|\[0, 1\]/);
+  assert.equal(existsSync(ledger), false);
+});
+
+test("attest: --eval-check without --eval-score → error (score+method required)", () => {
+  const ledger = join(dir, "eval-check-only.jsonl");
+  const f = file("e3.txt", "x");
+  const r = run([
+    "attest", f, "--intent", "w", "--agent", "a1", "--ledger", ledger,
+    "--eval-check", "unit:pass",
+  ]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--eval-score/);
+});
+
+test("eval: prints the live claim; --json returns it; exit 0", () => {
+  const ledger = join(dir, "eval-cmd.jsonl");
+  const f = file("e4.txt", "scored");
+  run([
+    "attest", f, "--intent", "w", "--agent", "a1", "--ledger", ledger,
+    "--eval-score", "0.75", "--eval-method", "judge",
+  ]);
+  const human = run(["eval", f, "--ledger", ledger]);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /eval 0\.75 \(judge\)/);
+
+  const j = run(["eval", f, "--ledger", ledger, "--json"]);
+  assert.equal(j.status, 0);
+  const claim = JSON.parse(j.stdout);
+  assert.equal(claim.score, 0.75);
+  assert.equal(claim.method, "judge");
+  assert.equal(claim.agent, "a1");
+});
+
+test("eval: accepts a raw sha256 digest argument", () => {
+  const ledger = join(dir, "eval-hash.jsonl");
+  const f = file("e5.txt", "by hash eval");
+  run([
+    "attest", f, "--intent", "w", "--agent", "a1", "--ledger", ledger,
+    "--eval-score", "0.8", "--eval-method", "self",
+  ]);
+  const hash = computeHash("by hash eval");
+  const r = run(["eval", hash, "--ledger", ledger, "--json"]);
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).score, 0.8);
+});
+
+test("eval: an artifact with no evaluation → exit 1, null in --json", () => {
+  const ledger = join(dir, "eval-none.jsonl");
+  const f = file("e6.txt", "ungraded");
+  run(["attest", f, "--intent", "w", "--agent", "a1", "--ledger", ledger]);
+  const human = run(["eval", f, "--ledger", ledger]);
+  assert.equal(human.status, 1);
+  assert.match(human.stdout, /no evaluation/);
+  const j = run(["eval", f, "--ledger", ledger, "--json"]);
+  assert.equal(j.status, 1);
+  assert.equal(JSON.parse(j.stdout), null);
+});
+
+test("confidence: all evaluated above threshold → exit 0, --json math", () => {
+  const ledger = join(dir, "conf-clean.jsonl");
+  const a = file("cf1.txt", "aaa");
+  const b = file("cf2.txt", "bbb");
+  run(["attest", a, "--intent", "w", "--agent", "x", "--ledger", ledger, "--eval-score", "0.9", "--eval-method", "test"]);
+  run(["attest", b, "--intent", "w", "--agent", "x", "--ledger", ledger, "--eval-score", "0.85", "--eval-method", "test"]);
+
+  const human = run(["confidence", a, b, "--threshold", "0.8", "--ledger", ledger]);
+  assert.equal(human.status, 0, human.stderr);
+  assert.match(human.stdout, /2\/2 artifacts evaluated/);
+
+  const j = run(["confidence", a, b, "--threshold", "0.8", "--ledger", ledger, "--json"]);
+  assert.equal(j.status, 0);
+  const out = JSON.parse(j.stdout);
+  assert.equal(out.evaluated, 2);
+  assert.deepEqual(out.unevaluated, []);
+  assert.deepEqual(out.below, []);
+  assert.ok(Math.abs(out.mean_score - 0.875) < 1e-9);
+  assert.equal(out.min_score, 0.85);
+});
+
+test("confidence: a below-threshold or unevaluated file → exit 1, listed", () => {
+  const ledger = join(dir, "conf-flag.jsonl");
+  const a = file("cf3.txt", "high");
+  const b = file("cf4.txt", "low");
+  const c = file("cf5.txt", "ungraded");
+  run(["attest", a, "--intent", "w", "--agent", "x", "--ledger", ledger, "--eval-score", "0.95", "--eval-method", "test"]);
+  run(["attest", b, "--intent", "w", "--agent", "x", "--ledger", ledger, "--eval-score", "0.4", "--eval-method", "self"]);
+  run(["attest", c, "--intent", "w", "--agent", "x", "--ledger", ledger]);
+
+  const j = run(["confidence", a, b, c, "--threshold", "0.8", "--ledger", ledger, "--json"]);
+  assert.equal(j.status, 1);
+  const out = JSON.parse(j.stdout);
+  assert.equal(out.evaluated, 2);
+  assert.equal(out.unevaluated.length, 1);
+  assert.equal(out.below.length, 1);
+  assert.equal(out.below[0].score, 0.4);
+});
+
+test("confidence: an unreadable file → error, exit 1", () => {
+  const ledger = join(dir, "conf-missing.jsonl");
+  const r = run(["confidence", join(dir, "nope.txt"), "--ledger", ledger]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /cannot read file/);
+});
+
 // --- log -------------------------------------------------------------------
 
 test("log: an empty/missing ledger → 'no attestations', exit 0; --json → []", () => {
@@ -439,6 +577,24 @@ test("otel: emits one flat provenant.* attribute object per attestation", () => 
   for (const v of Object.values(rows[0])) {
     assert.ok(["string", "number", "boolean"].includes(typeof v));
   }
+});
+
+test("otel: emits provenant.eval.* for an attestation carrying an evaluation", () => {
+  const ledger = join(dir, "otel-eval.jsonl");
+  const f = file("oteleval.txt", "graded otel");
+  assert.equal(
+    run([
+      "attest", f, "--intent", "ship", "--agent", "claude", "--ledger", ledger,
+      "--eval-score", "0.9", "--eval-method", "test", "--eval-check", "unit:pass",
+    ]).status,
+    0
+  );
+  const r = run(["otel", ledger]);
+  assert.equal(r.status, 0, r.stderr);
+  const rows = JSON.parse(r.stdout);
+  assert.equal(rows[0]["provenant.eval.score"], 0.9);
+  assert.equal(rows[0]["provenant.eval.method"], "test");
+  assert.equal(rows[0]["provenant.eval.checks_passed"], 1);
 });
 
 test("otel: an empty/missing ledger emits an empty array, exit 0", () => {

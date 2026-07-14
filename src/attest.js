@@ -12,7 +12,7 @@
 
 import { computeRecordId } from "./registry.js";
 import { computeHash } from "./hash.js";
-import { isSha256Hex, isIso8601Utc } from "./schema.js";
+import { isSha256Hex, isIso8601Utc, validateEvaluation } from "./schema.js";
 
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
@@ -48,13 +48,18 @@ function resolveArtifact(artifact) {
 //   meta.parents — attestation ids this work derives from (default [])
 //   meta.created — ISO-8601-UTC timestamp the artifact was attested at
 //   meta.meta   — optional free-form object (harness/model/session, …)
+//   meta.evaluation — optional attested CLAIM about the artifact's quality:
+//                 `{ score (0..1), method, checks?, evaluator? }`. Part of the
+//                 canonical content, so the content-hash id (and any signature)
+//                 cover it — the score can't be silently edited. When absent,
+//                 the record is byte-for-byte identical to a no-eval attestation.
 //
 // `id` is the ledger's shared content hash of the whole record (its `id`
 // excluded), so an attestation's id IS its content hash and it resolves cleanly
 // through the store — one hasher across every record type. Throws on any invalid
 // input rather than emitting a malformed record.
 export function attest(artifact, meta = {}) {
-  const { agent, intent, parents = [], created, meta: metaObj } = meta;
+  const { agent, intent, parents = [], created, meta: metaObj, evaluation } = meta;
 
   const artifactHash = resolveArtifact(artifact);
 
@@ -78,8 +83,22 @@ export function attest(artifact, meta = {}) {
   if (metaObj !== undefined && !isPlainObject(metaObj)) {
     throw new Error("attest: meta must be an object");
   }
+  // An evaluation, when given, must be a well-formed claim: validate it up front
+  // (non-throwing validator) and throw a clear error rather than hashing a
+  // malformed score into the record.
+  if (evaluation !== undefined) {
+    const res = validateEvaluation(evaluation);
+    if (!res.valid) {
+      const detail = res.errors
+        .map((e) => `${e.path === "" ? "<root>" : e.path}: ${e.message}`)
+        .join("; ");
+      throw new Error(`attest: evaluation is invalid: ${detail}`);
+    }
+  }
 
   // Build the record in canonical field order (id excluded — it is derived).
+  // `evaluation` sits with the other content, so it is covered by the content
+  // hash and any signature; omitted entirely when absent (backward-compatible).
   const record = {
     type: "attestation",
     agent,
@@ -88,6 +107,7 @@ export function attest(artifact, meta = {}) {
     parents: [...parents],
     created,
     ...(metaObj !== undefined ? { meta: metaObj } : {}),
+    ...(evaluation !== undefined ? { evaluation } : {}),
   };
   return { id: computeRecordId(record), ...record };
 }

@@ -2,10 +2,13 @@
 // provenant CLI.
 //
 // Dispatches to subcommands:
-//  - `attest <file>`: hash a file's content and append an attestation.
+//  - `attest <file>`: hash a file's content and append an attestation (with an
+//    optional evaluation claim via --eval-score / --eval-method / --eval-check).
 //  - `verify <file-or-hash>`: is this artifact attested? (exit 0 = yes).
 //  - `chain <attestation-id>`: print an attestation's provenance chain.
 //  - `coverage <path...>`: what fraction of the given files is attested?
+//  - `eval <file-or-hash>`: print the live evaluation claim for an artifact.
+//  - `confidence <path...>`: which outputs are low-confidence / unevaluated?
 //  - `log`: list the ledger's attestations (who produced what, why).
 //  - `revoke <attestation-id> --reason`: supersede an attestation.
 //  - `hook install|run`: git post-commit adapter — auto-attest changed files.
@@ -16,6 +19,7 @@ import { attest, revoke } from "../src/attest.js";
 import { computeHash } from "../src/hash.js";
 import { validateAttestation, isSha256Hex } from "../src/schema.js";
 import { verify, chainOf, coverage } from "../src/verify.js";
+import { evalOf, evalCoverage } from "../src/evaluation.js";
 import { attestationToSpanAttributes, coverageToSpanAttributes } from "../src/otel.js";
 import { attestCommit, installHook } from "../src/adapters/git-hook.js";
 import {
@@ -30,9 +34,14 @@ const USAGE = `provenant — the open provenance format for AI-agent work
 
 Usage:
   provenant attest <file> --intent "<why>" [--agent <id>] [--parents <ids>]
+                          [--eval-score <0..1> --eval-method <m>]
+                          [--eval-check <name:pass> ...] [--eval-evaluator <id>]
                           [--ledger <path>] [--json]
       Hash the file's content and append a signed-off attestation to the ledger:
       which agent produced this content, why, and what it derives from. Exit 0.
+      With --eval-score + --eval-method, the attestation also carries an
+      evaluation: an attested CLAIM about the artifact's quality/confidence
+      (covered by the content-hash id, so the score can't be silently edited).
   provenant verify <file-or-hash> [--ledger <path>] [--json]
       Is the artifact (a file, hashed here, or a raw sha256 digest) attested?
       Exit 0 if a live attestation exists, 1 otherwise (or if revoked).
@@ -42,6 +51,14 @@ Usage:
   provenant coverage <path...> [--ledger <path>] [--json]
       Audit what fraction of the given files carry a live attestation. Exit 0
       when all are attested, 1 when any is unattested or revoked.
+  provenant eval <file-or-hash> [--ledger <path>] [--json]
+      Print the live evaluation claim for an artifact (score, method, checks,
+      evaluator, agent). Exit 0 if a claim exists, 1 if none.
+  provenant confidence <path...> [--threshold <0..1>] [--ledger <path>] [--json]
+      The confidence audit: which of the given files are low-confidence or
+      unevaluated? Reports evaluated/unevaluated counts, mean + min score, and
+      (with --threshold) the files scoring below it. Exit 0 when all are
+      evaluated and none is below the threshold, 1 otherwise.
   provenant log [--all] [--agent <id>] [--ledger <path>] [--json]
       List the ledger's live attestations (who produced what, why, from what).
       --all also shows revoked attestations, labeled.
@@ -63,6 +80,11 @@ Flags:
   --intent <str>   why the artifact was produced (required for \`attest\`)
   --agent <id>     the producing agent (env PROVENANT_AGENT)
   --parents <ids>  comma-separated attestation ids this work derives from
+  --eval-score <n> the artifact's claimed quality/confidence, a number in [0,1]
+  --eval-method <m> how it was judged: self | test | judge | human | <custom>
+  --eval-check <c> a named sub-check \`name:pass\` or \`name:fail\` (repeatable)
+  --eval-evaluator <id>  who/what evaluated (optional)
+  --threshold <n>  flag artifacts scoring below n (confidence)
   --reason <str>   why an attestation is being revoked (required for \`revoke\`)
   --all            include revoked attestations (log)
   --ledger <path>  ledger file (default: env PROVENANT_LEDGER or
@@ -89,11 +111,29 @@ function nowIso() {
 
 // --- attest ----------------------------------------------------------------
 
+// Parse a `--eval-check name:pass` value into a `{ name, passed }` entry. The
+// token after the first colon names the outcome; pass/passed/true/yes/ok/1 (any
+// case) is a pass, anything else a fail. A value with no colon is a usage error.
+const CHECK_PASS_TOKENS = new Set(["pass", "passed", "true", "yes", "ok", "1"]);
+function parseEvalCheck(v) {
+  const idx = v.indexOf(":");
+  if (idx < 0) {
+    fail(`error: --eval-check expects \`name:pass\` or \`name:fail\` (got: ${v})\n\n` + USAGE);
+  }
+  const name = v.slice(0, idx);
+  const outcome = v.slice(idx + 1).trim().toLowerCase();
+  return { name, passed: CHECK_PASS_TOKENS.has(outcome) };
+}
+
 function parseAttestArgs(args) {
   let file = null;
   let intent = null;
   let agent = process.env.PROVENANT_AGENT || null;
   let parents = [];
+  let evalScore = null;
+  let evalMethod = null;
+  let evalEvaluator = null;
+  const evalChecks = [];
   let ledger = null;
   let json = false;
 
@@ -111,6 +151,21 @@ function parseAttestArgs(args) {
       const v = args[++i];
       if (v == null) fail("error: --parents requires a value\n\n" + USAGE);
       parents = v.split(",").map((s) => s.trim()).filter(Boolean);
+    } else if (a === "--eval-score") {
+      const v = args[++i];
+      if (v == null) fail("error: --eval-score requires a value\n\n" + USAGE);
+      evalScore = Number(v);
+      if (Number.isNaN(evalScore)) fail(`error: --eval-score must be a number (got: ${v})\n\n` + USAGE);
+    } else if (a === "--eval-method") {
+      evalMethod = args[++i];
+      if (evalMethod == null) fail("error: --eval-method requires a value\n\n" + USAGE);
+    } else if (a === "--eval-evaluator") {
+      evalEvaluator = args[++i];
+      if (evalEvaluator == null) fail("error: --eval-evaluator requires a value\n\n" + USAGE);
+    } else if (a === "--eval-check") {
+      const v = args[++i];
+      if (v == null) fail("error: --eval-check requires a value\n\n" + USAGE);
+      evalChecks.push(parseEvalCheck(v));
     } else if (a === "--ledger") {
       ledger = args[++i];
       if (ledger == null) fail("error: --ledger requires a value\n\n" + USAGE);
@@ -122,11 +177,12 @@ function parseAttestArgs(args) {
       fail(`error: \`attest\` takes a single <file> (extra: ${a})\n\n` + USAGE);
     }
   }
-  return { file, intent, agent, parents, ledger, json };
+  return { file, intent, agent, parents, evalScore, evalMethod, evalEvaluator, evalChecks, ledger, json };
 }
 
 function runAttest(args) {
-  const { file, intent, agent, parents, ledger, json } = parseAttestArgs(args);
+  const { file, intent, agent, parents, evalScore, evalMethod, evalEvaluator, evalChecks, ledger, json } =
+    parseAttestArgs(args);
 
   if (file == null) {
     fail("error: `attest` requires a <file> argument\n\n" + USAGE);
@@ -141,6 +197,30 @@ function runAttest(args) {
     return;
   }
 
+  // An evaluation claim is opt-in: it exists iff any --eval-* flag was given.
+  // score + method are the required pair; checks/evaluator are additive. The
+  // finished claim is validated inside `attest` (which throws on a bad shape),
+  // caught below like any other invalid input.
+  const hasEval =
+    evalScore != null || evalMethod != null || evalEvaluator != null || evalChecks.length > 0;
+  let evaluation;
+  if (hasEval) {
+    if (evalScore == null) {
+      fail("error: an evaluation requires --eval-score\n\n" + USAGE);
+      return;
+    }
+    if (evalMethod == null || evalMethod.trim().length === 0) {
+      fail("error: an evaluation requires --eval-method\n\n" + USAGE);
+      return;
+    }
+    evaluation = {
+      score: evalScore,
+      method: evalMethod,
+      ...(evalChecks.length > 0 ? { checks: evalChecks } : {}),
+      ...(evalEvaluator != null ? { evaluator: evalEvaluator } : {}),
+    };
+  }
+
   let content;
   try {
     content = readFileSync(file);
@@ -152,7 +232,7 @@ function runAttest(args) {
   // The clock is read only here; attest stays pure over the injected `created`.
   let record;
   try {
-    record = attest(content, { agent, intent, parents, created: nowIso() });
+    record = attest(content, { agent, intent, parents, created: nowIso(), ...(evaluation ? { evaluation } : {}) });
   } catch (e) {
     fail(`error: ${e.message}`);
     return;
@@ -179,9 +259,12 @@ function runAttest(args) {
   if (json) {
     process.stdout.write(JSON.stringify(record) + "\n");
   } else {
+    const evalNote = record.evaluation
+      ? ` — eval ${record.evaluation.score} (${record.evaluation.method})`
+      : "";
     process.stdout.write(
       `attested ${record.id} — ${record.agent} produced ${shortId(record.artifact)} — ` +
-        `"${record.intent}"\n`
+        `"${record.intent}"${evalNote}\n`
     );
   }
   process.exit(0);
@@ -371,6 +454,148 @@ function runCoverage(args) {
     }
   }
 
+  process.exit(clean ? 0 : 1);
+}
+
+// --- eval ------------------------------------------------------------------
+
+// Resolve a <file-or-hash> argument to a sha256 digest: a 64-hex value is taken
+// verbatim, anything else is a file path whose content is hashed. Shared by
+// `eval` (and mirrors the same rule `verify` uses inline).
+function resolveHashArg(value) {
+  if (isSha256Hex(value)) return value;
+  let content;
+  try {
+    content = readFileSync(value);
+  } catch {
+    fail(`error: not a sha256 digest and cannot read as a file: ${value}`);
+    return null;
+  }
+  return computeHash(content);
+}
+
+function runEval(args) {
+  const { value, ledger, json } = parseSingleArgWithLedger(args, "eval");
+
+  if (value == null) {
+    fail("error: `eval` requires a <file-or-hash> argument\n\n" + USAGE);
+    return;
+  }
+
+  const hash = resolveHashArg(value);
+  if (hash == null) return;
+
+  const path = ledger || defaultLedgerPath();
+  const { attestations, notes } = loadLedger(path);
+  warnNotes(notes);
+
+  const claim = evalOf(hash, attestations);
+
+  if (json) {
+    process.stdout.write(JSON.stringify(claim) + "\n");
+    process.exit(claim ? 0 : 1);
+  }
+
+  if (!claim) {
+    process.stdout.write(`no evaluation ✗ — no live evaluation claim for ${shortId(hash)}\n`);
+    process.exit(1);
+  }
+
+  const passed = claim.checks.filter((c) => c.passed).length;
+  const evaluator = claim.evaluator ? ` by ${claim.evaluator}` : "";
+  process.stdout.write(
+    `eval ${claim.score} (${claim.method})${evaluator} — ${shortId(hash)} attested by ${claim.agent}` +
+      ` — ${passed}/${claim.checks.length} check${claim.checks.length === 1 ? "" : "s"} passed\n`
+  );
+  for (const c of claim.checks) {
+    const mark = c.passed ? "✓" : "✗";
+    const note = c.note ? ` — ${c.note}` : "";
+    process.stdout.write(`  ${mark} ${c.name}${note}\n`);
+  }
+  process.exit(0);
+}
+
+// --- confidence ------------------------------------------------------------
+
+function parseConfidenceArgs(args) {
+  const files = [];
+  let threshold = null;
+  let ledger = null;
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--json") {
+      json = true;
+    } else if (a === "--threshold") {
+      const v = args[++i];
+      if (v == null) fail("error: --threshold requires a value\n\n" + USAGE);
+      threshold = Number(v);
+      if (Number.isNaN(threshold)) fail(`error: --threshold must be a number (got: ${v})\n\n` + USAGE);
+    } else if (a === "--ledger") {
+      ledger = args[++i];
+      if (ledger == null) fail("error: --ledger requires a value\n\n" + USAGE);
+    } else if (a.startsWith("--")) {
+      fail(`error: unknown flag: ${a}\n\n` + USAGE);
+    } else {
+      files.push(a);
+    }
+  }
+  return { files, threshold, ledger, json };
+}
+
+function runConfidence(args) {
+  const { files, threshold, ledger, json } = parseConfidenceArgs(args);
+
+  if (files.length === 0) {
+    fail("error: `confidence` requires one or more file paths\n\n" + USAGE);
+    return;
+  }
+
+  // Hash each file's content; an unreadable file is a clear error (the audit
+  // asks about concrete files, so a missing one is a mistake to surface).
+  const hashes = [];
+  for (const f of files) {
+    let content;
+    try {
+      content = readFileSync(f);
+    } catch {
+      fail(`error: cannot read file: ${f}`);
+      return;
+    }
+    hashes.push(computeHash(content));
+  }
+
+  const path = ledger || defaultLedgerPath();
+  const { attestations, notes } = loadLedger(path);
+  warnNotes(notes);
+
+  const opts = threshold == null ? {} : { threshold };
+  const report = evalCoverage(hashes, attestations, opts);
+  const clean = report.unevaluated.length === 0 && report.below.length === 0;
+
+  if (json) {
+    process.stdout.write(JSON.stringify(report) + "\n");
+    process.exit(clean ? 0 : 1);
+  }
+
+  const total = report.evaluated + report.unevaluated.length;
+  const mean = report.mean_score == null ? "n/a" : report.mean_score.toFixed(2);
+  const min = report.min_score == null ? "n/a" : report.min_score.toFixed(2);
+  process.stdout.write(
+    `confidence — ${report.evaluated}/${total} artifact${total === 1 ? "" : "s"} evaluated, ` +
+      `mean ${mean}, min ${min}\n`
+  );
+  if (report.unevaluated.length) {
+    process.stdout.write(`  ${report.unevaluated.length} unevaluated\n`);
+  }
+  if (report.below.length) {
+    process.stdout.write(
+      `  ${report.below.length} below threshold ${threshold}:\n`
+    );
+    for (const b of report.below) {
+      process.stdout.write(`    ${shortId(b.artifact)}  ${b.score}\n`);
+    }
+  }
   process.exit(clean ? 0 : 1);
 }
 
@@ -690,6 +915,8 @@ function main(argv) {
   if (command === "verify") return runVerify(args.slice(1));
   if (command === "chain") return runChain(args.slice(1));
   if (command === "coverage") return runCoverage(args.slice(1));
+  if (command === "eval") return runEval(args.slice(1));
+  if (command === "confidence") return runConfidence(args.slice(1));
   if (command === "log") return runLog(args.slice(1));
   if (command === "revoke") return runRevoke(args.slice(1));
   if (command === "hook") return runHook(args.slice(1));
