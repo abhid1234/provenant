@@ -9,12 +9,14 @@
 //  - `log`: list the ledger's attestations (who produced what, why).
 //  - `revoke <attestation-id> --reason`: supersede an attestation.
 //  - `hook install|run`: git post-commit adapter — auto-attest changed files.
+//  - `otel <ledger>`: emit OpenTelemetry span attributes for the ledger.
 
 import { readFileSync } from "node:fs";
 import { attest, revoke } from "../src/attest.js";
 import { computeHash } from "../src/hash.js";
 import { validateAttestation, isSha256Hex } from "../src/schema.js";
 import { verify, chainOf, coverage } from "../src/verify.js";
+import { attestationToSpanAttributes, coverageToSpanAttributes } from "../src/otel.js";
 import { attestCommit, installHook } from "../src/adapters/git-hook.js";
 import {
   loadLedger,
@@ -52,6 +54,10 @@ Usage:
       Idempotent; preserves an existing hook.
   provenant hook run [--agent <id>] [--ledger <path>] [--json]
       What the hook runs: attest each file changed in the HEAD commit.
+  provenant otel <ledger-file> [--coverage <path...>]
+      Emit OpenTelemetry-style span attributes (JSON) for the ledger: one flat
+      \`provenant.*\` attribute object per attestation. With --coverage, instead
+      emit the single \`provenant.coverage.*\` attribute object for those files.
 
 Flags:
   --intent <str>   why the artifact was produced (required for \`attest\`)
@@ -609,6 +615,71 @@ function runHook(args) {
   fail(`error: unknown hook subcommand: ${sub} (expected install | run)\n\n` + USAGE);
 }
 
+// --- otel ------------------------------------------------------------------
+
+function parseOtelArgs(args) {
+  let ledger = null;
+  const coverageFiles = [];
+  let coverageMode = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--coverage") {
+      coverageMode = true;
+    } else if (a.startsWith("--")) {
+      fail(`error: unknown flag: ${a}\n\n` + USAGE);
+    } else if (coverageMode) {
+      // Once --coverage is seen, remaining positionals are the files to audit.
+      coverageFiles.push(a);
+    } else if (ledger == null) {
+      ledger = a;
+    } else {
+      fail(`error: \`otel\` takes a single <ledger-file> (extra: ${a})\n\n` + USAGE);
+    }
+  }
+  return { ledger, coverageFiles, coverageMode };
+}
+
+function runOtel(args) {
+  const { ledger, coverageFiles, coverageMode } = parseOtelArgs(args);
+
+  if (ledger == null) {
+    fail("error: `otel` requires a <ledger-file> argument\n\n" + USAGE);
+    return;
+  }
+
+  const { attestations, notes } = loadLedger(ledger);
+  warnNotes(notes);
+
+  // --coverage: audit the given files against the ledger and emit the single
+  // `provenant.coverage.*` attribute object.
+  if (coverageMode) {
+    if (coverageFiles.length === 0) {
+      fail("error: `otel --coverage` requires one or more file paths\n\n" + USAGE);
+      return;
+    }
+    const hashes = [];
+    for (const f of coverageFiles) {
+      let content;
+      try {
+        content = readFileSync(f);
+      } catch {
+        fail(`error: cannot read file: ${f}`);
+        return;
+      }
+      hashes.push(computeHash(content));
+    }
+    const report = coverage(hashes, attestations);
+    process.stdout.write(JSON.stringify(coverageToSpanAttributes(report)) + "\n");
+    process.exit(0);
+  }
+
+  // Default: one flat `provenant.*` attribute object per attestation, as a JSON
+  // array (empty ledger → `[]`).
+  const rows = attestations.map((a) => attestationToSpanAttributes(a));
+  process.stdout.write(JSON.stringify(rows) + "\n");
+  process.exit(0);
+}
+
 // --- main router -----------------------------------------------------------
 
 function main(argv) {
@@ -622,6 +693,7 @@ function main(argv) {
   if (command === "log") return runLog(args.slice(1));
   if (command === "revoke") return runRevoke(args.slice(1));
   if (command === "hook") return runHook(args.slice(1));
+  if (command === "otel") return runOtel(args.slice(1));
 
   // Unknown / missing subcommand → usage on stderr, exit 1.
   fail(USAGE);

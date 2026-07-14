@@ -25,8 +25,11 @@ Built the same way as constraintguard / worklease / memport / selfpatch: each fe
 6. **git-hook adapter (dogfood)** — a post-commit hook that attests every file a commit changed, chaining each new version to the previous attestation of that path. Dogfood on the author's own parallel-agent factory.
 7. **Claude Code / Codex / Cursor / Google Antigravity adapters** — surface `attest` to each harness (a hook or an MCP tool) so an agent records provenance as it produces work.
 8. **`provenant audit`** — a repo-wide coverage report: which tracked files carry a live attestation, which don't, and which were revoked.
-9. **OpenTelemetry bridge** — emit attest/verify/revoke events as span attributes (reuse the family pattern).
-10. **asymmetric signatures** — an optional ed25519 layer above HMAC, for cross-org verification without a shared secret.
+
+## Shipped (v0.2)
+
+9. **OpenTelemetry bridge** — `src/otel.js`: `attestationToSpanAttributes` / `coverageToSpanAttributes` project a record (and a `coverage()` report) onto a FLAT `provenant.*` span-attribute object (scalars only; arrays joined to comma strings), so an agent decorates the span it already emits with who-produced-what-why-and-is-it-attested. Plus `provenant otel <ledger> [--coverage <paths…>]`. Pure, deterministic, zero-dep. Reuses the family bridge convention (constraintguard's `cg otel`).
+10. **asymmetric signatures** — `src/sign-asym.js`: an optional ed25519 layer above HMAC (`generateKeypair` / `signAsym` / `verifyAsym`, detached and embedded forms) for cross-org verification without a shared secret. Signs the same canonical pre-image the ledger already hashes; Node's built-in `crypto` only, zero external dep. Layered, never required.
 
 ## The playground (community hook — priority)
 A browser page running the **real** library: an agent "produces" a file, provenant attests it, and you watch the ledger grow. Tamper with a byte of the artifact → `verify` goes red offline. Walk the provenance chain of a derived artifact back to its sources. Revoke an attestation and watch coverage drop. Same house style as constraintguard.vercel.app — the visceral "provenance you can check yourself" demo.

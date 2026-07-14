@@ -415,3 +415,58 @@ test("hook with an unknown subcommand → error, exit 1", () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /unknown hook subcommand/);
 });
+
+// --- otel (CLI) ------------------------------------------------------------
+
+test("otel: emits one flat provenant.* attribute object per attestation", () => {
+  const ledger = join(dir, "otel-attrs.jsonl");
+  const f = file("otel1.txt", "hello otel");
+  assert.equal(
+    run(["attest", f, "--intent", "ship", "--agent", "claude", "--ledger", ledger]).status,
+    0
+  );
+
+  const r = run(["otel", ledger]);
+  assert.equal(r.status, 0, r.stderr);
+  const rows = JSON.parse(r.stdout);
+  assert.equal(Array.isArray(rows), true);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]["provenant.agent"], "claude");
+  assert.equal(rows[0]["provenant.intent"], "ship");
+  assert.equal(rows[0]["provenant.artifact"], computeHash("hello otel"));
+  assert.equal(rows[0]["provenant.revoked"], false);
+  // Flat + scalar values only.
+  for (const v of Object.values(rows[0])) {
+    assert.ok(["string", "number", "boolean"].includes(typeof v));
+  }
+});
+
+test("otel: an empty/missing ledger emits an empty array, exit 0", () => {
+  const r = run(["otel", join(dir, "otel-missing.jsonl")]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), []);
+});
+
+test("otel --coverage: emits the flat provenant.coverage.* attribute object", () => {
+  const ledger = join(dir, "otel-cov.jsonl");
+  const f = file("otelcov.txt", "covered");
+  assert.equal(
+    run(["attest", f, "--intent", "w", "--agent", "a1", "--ledger", ledger]).status,
+    0
+  );
+  const missing = file("otelmissing.txt", "not attested");
+
+  const r = run(["otel", ledger, "--coverage", f, missing]);
+  assert.equal(r.status, 0, r.stderr);
+  const attrs = JSON.parse(r.stdout);
+  assert.equal(attrs["provenant.coverage.total"], 2);
+  assert.equal(attrs["provenant.coverage.attested"], 1);
+  assert.equal(attrs["provenant.coverage.unattested"], 1);
+  assert.equal(attrs["provenant.coverage.score"], 0.5);
+});
+
+test("otel without a ledger argument → error, exit 1", () => {
+  const r = run(["otel"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /requires a <ledger-file>/);
+});

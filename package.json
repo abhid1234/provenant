@@ -1,7 +1,7 @@
 {
   "name": "@avee1234/provenant",
-  "version": "0.1.0",
-  "description": "The open provenance format for AI-agent work. A verifiable, portable, append-only ledger of which agent produced which artifact, why, and derived from what — with content-hash IDs, offline verification, provenance chains, and optional HMAC tamper-evidence. Zero dependencies, harness-neutral.",
+  "version": "0.2.0",
+  "description": "The open provenance format for AI-agent work. A verifiable, portable, append-only ledger of which agent produced which artifact, why, and derived from what — with content-hash IDs, offline verification, provenance chains, and optional HMAC or ed25519 tamper-evidence. Zero dependencies, harness-neutral.",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -29,6 +29,9 @@
     "content-address",
     "ledger",
     "zero-dependency",
+    "opentelemetry",
+    "ed25519",
+    "signatures",
     "claude-code",
     "codex",
     "cursor",

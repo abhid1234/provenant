@@ -43,7 +43,7 @@ An attestation is one JSON object. `id` is the sha256 content hash of the record
 - `parents` — **from what** — the attestation ids this work derives from (`chain` walks these back to origins).
 - `created` — an ISO-8601-**UTC** timestamp (`…Z`; offsets and impossible calendar dates are rejected).
 - `meta` *(optional)* — free-form context (harness / model / session / path).
-- `signature` *(optional)* — an HMAC-sha256 digest proving *who wrote the record*, not just what it says.
+- `signature` *(optional)* — a digest proving *who wrote the record*, not just what it says: HMAC-sha256 (shared secret) or an ed25519 signature (cross-org, no shared secret).
 
 A **revocation** supersedes an attestation: `{ id, type: "revocation", attestation_id, agent, reason, at }`. Revocations are appended, never deletions — the ledger stays append-only, and `verify` folds them in at read time.
 
@@ -74,9 +74,18 @@ Zero-dependency ESM. `import { … } from "@avee1234/provenant"`. Every function
 - `chainOf(attestationId, attestations)` → the ordered provenance chain (record + ancestors via `parents`, deduped and cycle-safe)
 - `coverage(artifactHashes, attestations)` → `{ score, total, attested, unattested, revoked }`
 
-**Sign** *(optional HMAC tamper-evidence)*
+**Sign** *(optional HMAC tamper-evidence — shared secret)*
 - `sign(record, secret)` → HMAC-sha256 hex over the record's canonical pre-image
 - `verifySignature(record, secret)` → constant-time boolean
+
+**Sign (ed25519)** *(optional asymmetric tamper-evidence — cross-org, no shared secret)*
+- `generateKeypair()` → `{ publicKey, privateKey }` PEM strings (SPKI / PKCS#8)
+- `signAsym(record, privateKeyPem)` → a detached ed25519 signature (hex) over the same canonical pre-image
+- `verifyAsym(record, publicKeyPem, signatureHex?)` → boolean; pass `signatureHex` (detached) or omit it to verify the record's own `signature` (embedded). Never throws — a bad key/signature is `false`.
+
+**OpenTelemetry** *(pure record → span-attribute bridge)*
+- `attestationToSpanAttributes(record)` → a FLAT `provenant.*` attribute object (scalars only; `parents` joined to a comma string, plus `parent_count`, `revoked`, `signed`)
+- `coverageToSpanAttributes(report)` → a FLAT `provenant.coverage.*` attribute object from a `coverage()` result
 
 **Git adapter** *(the dogfood surface)*
 - `attestCommit({ cwd, agent, ledger, created, intent })`, `changedPaths`, `installHook`, `hookPath`, `renderHookBlock`
@@ -92,6 +101,7 @@ provenant log [--all] [--agent <id>] [--ledger <path>] [--json]
 provenant revoke <attestation-id> --reason "<why>" [--agent <id>] [--ledger <path>] [--json]
 provenant hook install [--ledger <path>]
 provenant hook run [--agent <id>] [--ledger <path>] [--json]
+provenant otel <ledger-file> [--coverage <path...>]
 ```
 
 - **`attest <file>`** — hash the file's content and append an attestation: which agent produced it, why, and what it derives from. The record is validated before it's written. Exit `0` on write.
@@ -101,12 +111,21 @@ provenant hook run [--agent <id>] [--ledger <path>] [--json]
 - **`log`** — list the ledger's live attestations (who produced what, why, from what). `--all` also shows revoked ones, labeled; `--agent` filters to one producer.
 - **`revoke <id> --reason`** — supersede an attestation by appending a revocation. A no-op with a note if it is already revoked (still exit `0`).
 - **`hook install` / `hook run`** — install a **git post-commit hook** that attests every file a commit changed, chaining each new version to the previous attestation of the same path. Post-commit (not pre-commit) is deliberate: provenance records what *did* happen, and the hook only ever appends — it never blocks or alters a commit. Install is idempotent and preserves any existing hook (it manages only a marked block).
+- **`otel <ledger-file>`** — emit OpenTelemetry-style span attributes (JSON) for the ledger: one flat `provenant.*` attribute object per attestation. With `--coverage <path...>`, instead emit the single `provenant.coverage.*` attribute object auditing those files against the ledger.
 
 Common flags: `--agent <id>` (or `PROVENANT_AGENT`), `--ledger <path>` (or `PROVENANT_LEDGER`, default `.provenant/ledger.jsonl`), `--json` for machine-readable output.
 
 ## The ledger
 
 The store is an **append-only JSONL file** (default `.provenant/ledger.jsonl`), meant to be **committed** so the provenance trail travels with the repo across worktrees and harnesses. New records are appended as whole lines; existing lines are never rewritten. Every record's `id` is a content hash of its own content, so a duplicated append is idempotent on read and two agents appending at once union-merge cleanly instead of conflicting. A line that fails its integrity check (its `id` no longer matches its content — i.e. it was tampered) or won't parse is skipped with a note surfaced to stderr — one bad line never discards the rest of the ledger.
+
+## OpenTelemetry
+
+provenant projects records onto **span attributes** so provenance rides along with the traces an agent fleet already emits. `attestationToSpanAttributes(record)` returns a **flat** `provenant.*` object — `provenant.agent`, `provenant.artifact`, `provenant.intent`, `provenant.parents` (the ids joined to a comma string) with `provenant.parent_count`, `provenant.created`, and the `provenant.revoked` / `provenant.signed` booleans — values are only strings, numbers, and booleans, so any exporter accepts them with no nesting. `coverageToSpanAttributes(coverage(…))` does the same for a repo audit under `provenant.coverage.*`. Both are pure and deterministic; `provenant otel <ledger>` prints them as JSON. Same bridge convention as the rest of the family (constraintguard's `cg otel`).
+
+## ed25519 signatures
+
+The HMAC layer proves authorship to anyone holding the shared secret — which is everyone who can verify, so it can't prove authorship *across* an org boundary. The optional **ed25519** layer closes that: the author signs with a private key nobody else holds, and anyone verifies with the matching public key — cross-org tamper-evidence with no shared secret. `generateKeypair()` mints a keypair (SPKI / PKCS#8 PEM), `signAsym(record, privateKeyPem)` signs the *same* canonical pre-image the ledger already hashes, and `verifyAsym(record, publicKeyPem, signatureHex?)` verifies the detached signature or the record's own embedded `signature`. Node's built-in `crypto` only — zero external dependency. Layered on top like HMAC; never required to attest or verify.
 
 ## Install
 
@@ -117,4 +136,4 @@ npx @avee1234/provenant attest …     # CLI, no install
 
 Requires Node ≥ 18. Run the test suite with `node --test`.
 
-Status: **v0.1** — see [`roadmap.md`](roadmap.md). MIT · zero dependencies · harness-neutral.
+Status: **v0.2** — see [`roadmap.md`](roadmap.md). MIT · zero dependencies · harness-neutral.
