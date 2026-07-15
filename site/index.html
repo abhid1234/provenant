@@ -294,7 +294,7 @@
   <section id="playground">
     <div class="kicker">Playground — runs the real library, in your browser</div>
     <h2 class="sec">Drive the ledger.</h2>
-    <p class="sub">Every tab runs the actual published <code>provenant</code> code, imported as ES modules — the same functions <code>npm i @avee1234/provenant</code> gives you. Nothing is faked or sent anywhere; sha256 comes from the browser's <code>crypto.subtle</code>. <b>Attest</b> an artifact, <b>walk its chain</b>, <b>verify</b> it, audit <b>coverage</b>, then <b>tamper</b> and <b>revoke</b> — all five tabs share the one live ledger below.</p>
+    <p class="sub">Every tab runs the actual published <code>provenant</code> code, imported as ES modules — the same functions <code>npm i @avee1234/provenant</code> gives you. Nothing is faked or sent anywhere; sha256 comes from the browser's <code>crypto.subtle</code>. <b>Attest</b> an artifact, <b>walk its chain</b>, <b>verify</b> it, audit <b>coverage</b> and <b>confidence</b>, then <b>tamper</b> and <b>revoke</b> — every tab shares the one live ledger below.</p>
 
     <div class="pg">
       <div class="tabs" role="tablist">
@@ -302,9 +302,10 @@
         <button class="tab" role="tab" aria-selected="false" data-tab="chain"><span class="num">02</span>Chain</button>
         <button class="tab" role="tab" aria-selected="false" data-tab="verify"><span class="num">03</span>Verify</button>
         <button class="tab" role="tab" aria-selected="false" data-tab="coverage"><span class="num">04</span>Coverage</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="tamper"><span class="num">05</span>Tamper &amp; Revoke</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="otel"><span class="num">06</span>OTel</button>
-        <button class="tab" role="tab" aria-selected="false" data-tab="sign"><span class="num">07</span>Sign</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="confidence"><span class="num">05</span>Confidence</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="tamper"><span class="num">06</span>Tamper &amp; Revoke</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="otel"><span class="num">07</span>OTel</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="sign"><span class="num">08</span>Sign</button>
       </div>
 
       <!-- 01 ATTEST -->
@@ -343,6 +344,40 @@
             </div>
             <label class="fl">derives from <span style="color:var(--faint)">— parent attestation (optional)</span></label>
             <select class="f" id="aParent"></select>
+            <label class="fl">evaluation <span style="color:var(--faint)">— optional attested confidence claim</span></label>
+            <div style="background:#0b1120;border:1px solid var(--line);border-radius:9px;padding:11px 13px;">
+              <label style="display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:12px;color:var(--ink2);cursor:pointer;">
+                <input type="checkbox" id="aEvalOn" style="accent-color:var(--gold)"> attach a confidence evaluation to this record
+              </label>
+              <div id="aEvalFields" style="display:none;margin-top:12px;">
+                <div class="row">
+                  <div>
+                    <label class="fl" style="margin-top:0">score · <span id="aEvalScoreVal" style="color:var(--gold2)">0.90</span></label>
+                    <input type="range" id="aEvalScore" min="0" max="1" step="0.01" value="0.90" style="width:100%;accent-color:var(--gold)">
+                  </div>
+                  <div>
+                    <label class="fl" style="margin-top:0">method</label>
+                    <select class="f" id="aEvalMethod">
+                      <option value="self">self</option>
+                      <option value="test">test</option>
+                      <option value="judge" selected>judge</option>
+                      <option value="human">human</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="row" style="align-items:flex-end">
+                  <div style="flex:2 1 200px">
+                    <label class="fl" style="margin-top:8px">check <span style="color:var(--faint)">— optional named sub-check</span></label>
+                    <input class="f" id="aCheckName" value="handles token refresh" spellcheck="false" placeholder="check name (optional)">
+                  </div>
+                  <div style="flex:0 0 auto">
+                    <label style="display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px;color:var(--ink2);cursor:pointer;padding-bottom:11px;">
+                      <input type="checkbox" id="aCheckPassed" checked style="accent-color:var(--gold)"> passed
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
             <div class="btnrow">
               <button class="btn" id="aBtn"><svg width="15" height="15"><use href="#ic-check" width="15" height="15"/></svg> Attest</button>
               <span class="mono" id="aMsg" style="font-size:11.5px;color:var(--faint)"></span>
@@ -401,7 +436,44 @@
         <div id="covRows"></div>
       </div>
 
-      <!-- 05 TAMPER & REVOKE -->
+      <!-- 05 CONFIDENCE -->
+      <div class="panel" id="p-confidence" role="tabpanel">
+        <p class="desc">An attestation can carry an optional <code>evaluation</code> — a content-hashed <em>claim</em> about the artifact's quality: a <code>score</code> in [0,1], a <code>method</code> (<code>self</code>/<code>test</code>/<code>judge</code>/<code>human</code>), and optional named <code>checks</code>. The real <code>evalCoverage(hashes, ledger, {threshold})</code> audits the working set — how many artifacts are <span style="color:var(--good)">evaluated</span>, the mean score, and which fall <span style="color:var(--bad)">below</span> the bar. Because the score is part of the canonical content, editing it breaks the record's <code>id</code>.</p>
+        <div class="grid2">
+          <div>
+            <div class="gauge">
+              <svg width="132" height="132" viewBox="0 0 132 132">
+                <circle cx="66" cy="66" r="52" fill="none" stroke="#22304c" stroke-width="12"/>
+                <circle id="evalGaugeArc" cx="66" cy="66" r="52" fill="none" stroke="#e6c15a" stroke-width="12"
+                        stroke-linecap="round" transform="rotate(-90 66 66)"
+                        stroke-dasharray="326.7" stroke-dashoffset="326.7" style="transition:stroke-dashoffset .6s ease,stroke .3s"/>
+                <text x="66" y="62" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="28" font-weight="700" fill="#f0e3b8" id="evalGaugePct">—</text>
+                <text x="66" y="84" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="9" letter-spacing="1.5" fill="#9aa6be">MEAN SCORE</text>
+              </svg>
+              <div class="lg mono" id="evalLegend"></div>
+            </div>
+            <label class="fl">confidence threshold · <span id="confThreshVal" style="color:var(--gold2)">0.70</span></label>
+            <input type="range" id="confThresh" min="0" max="1" step="0.01" value="0.70" style="width:100%;accent-color:var(--gold)">
+            <div id="evalRows" style="margin-top:14px"></div>
+          </div>
+          <div>
+            <p class="ctitle" style="font-size:16px">Tamper an evaluation score</p>
+            <p class="csub">The score is hashed into the record's <code>id</code>. Edit it in place and the ledger fold catches it — the record no longer hashes to its id, so <code>resolveRecords()</code> drops it and <code>verify</code> returns UNKNOWN.</p>
+            <label class="fl">evaluated attestation</label>
+            <select class="f" id="etSel"></select>
+            <div class="btnrow">
+              <button class="btn danger" id="etBtn"><svg width="14" height="14"><use href="#ic-x" width="14" height="14"/></svg> Tamper the score</button>
+            </div>
+            <div class="vresult" id="etResult">
+              <div class="vhead" id="etHead"></div>
+              <div class="vbody mono" id="etBody"></div>
+            </div>
+          </div>
+        </div>
+        <p class="csub" style="margin:14px 0 0"><b style="color:var(--ink)">A verifiable quality claim.</b> Distinct from runtime testing — this is an attested, content-addressed assertion recorded alongside provenance, audited offline like coverage. Tampering the score is caught from the ledger alone, because the id <em>is</em> the content hash.</p>
+      </div>
+
+      <!-- 06 TAMPER & REVOKE -->
       <div class="panel" id="p-tamper" role="tabpanel">
         <p class="desc">The two integrity demos. <b>Tamper</b> flips one byte of an artifact — its fingerprint stops matching any record, so <code>verify</code> returns UNKNOWN. <b>Revoke</b> leaves the bytes alone but appends a record that supersedes the attestation, flipping the seal to REVOKED. Both are caught offline, from the ledger alone.</p>
         <div class="grid2">
@@ -435,7 +507,7 @@
         </div>
       </div>
 
-      <!-- 06 OTEL -->
+      <!-- 07 OTEL -->
       <div class="panel" id="p-otel" role="tabpanel">
         <p class="desc">Map attestations to <b>OpenTelemetry span attributes</b> — attach to any span (Arize / LangSmith / Braintrust…). The real <code>attestationToSpanAttributes(record)</code> and <code>coverageToSpanAttributes(coverage(…))</code> project each record and the coverage report onto a <b>flat</b> <code>provenant.*</code> / <code>provenant.coverage.*</code> key namespace — scalar values only, so an agent can decorate the span it's already emitting with "which agent produced which artifact, why, and is it still attested" with no nesting and no I/O.</p>
         <div class="finger" style="margin-top:0;margin-bottom:16px">
@@ -446,7 +518,7 @@
         <p class="csub" style="margin:14px 0 0"><b style="color:var(--ink)">Deterministic and zero-dependency.</b> No clock, no crypto, no filesystem — a record in, a flat attribute object out. Arrays are joined to comma strings and revocation context appears only on a revoked record, so every emitted value is a bare scalar an exporter can ship as-is.</p>
       </div>
 
-      <!-- 07 SIGN -->
+      <!-- 08 SIGN -->
       <div class="panel" id="p-sign" role="tabpanel">
         <p class="desc">Cross-org tamper-evidence with <b>ed25519</b>. The author signs a record with a private key nobody else holds; anyone verifies with the matching public key — no shared secret. The signature covers provenant's <em>real</em> canonical pre-image: the same <code>canonicalize()</code> the content-hash <code>id</code> uses (id dropped, <code>signature</code> excluded). Pick an attestation, generate a keypair, and sign it.</p>
         <div class="grid2">
@@ -539,7 +611,8 @@ npx @avee1234/provenant hook install
     <p class="sub">provenant is a few hundred lines of pure, dependency-free JavaScript. The playground imports these same files as browser ES modules — <code>verify.js</code> and <code>schema.js</code> are copied verbatim from <code>src/</code>; <code>id.js</code> ports the record constructors and the ledger fold, swapping only Node's sha256 for the browser's <code>crypto.subtle</code>. What you poke at above <em>is</em> the library. Expand any file to read the real implementation, fetched live from <code>/lib</code>.</p>
     <details class="src"><summary><span>verify.js</span> <span class="fn">verify() · chainOf() · coverage()</span> <span class="chev">›</span></summary><pre id="src-verify">loading…</pre></details>
     <details class="src"><summary><span>id.js</span> <span class="fn">attest() · revoke() · resolveRecords()</span> <span class="chev">›</span></summary><pre id="src-id">loading…</pre></details>
-    <details class="src"><summary><span>schema.js</span> <span class="fn">validateAttestation() · validateLedger()</span> <span class="chev">›</span></summary><pre id="src-schema">loading…</pre></details>
+    <details class="src"><summary><span>schema.js</span> <span class="fn">validateAttestation() · validateEvaluation() · validateLedger()</span> <span class="chev">›</span></summary><pre id="src-schema">loading…</pre></details>
+    <details class="src"><summary><span>evaluation.js</span> <span class="fn">evalOf() · evalCoverage()</span> <span class="chev">›</span></summary><pre id="src-evaluation">loading…</pre></details>
   </section>
 
   <!-- ===================== WHAT'S IN THE BOX ===================== -->
@@ -586,8 +659,9 @@ npx @avee1234/provenant hook install
 <script type="module">
 import { verify, chainOf, coverage } from './lib/verify.js';
 import { validateAttestation } from './lib/schema.js';
-import { attest, revoke, resolveRecords, computeHash, shortId, canonicalize } from './lib/id.js';
+import { attest, revoke, resolveRecords, computeHash, computeRecordId, shortId, canonicalize } from './lib/id.js';
 import { attestationToSpanAttributes, coverageToSpanAttributes } from './lib/otel.js';
+import { evalCoverage, evalOf } from './lib/evaluation.js';
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -599,6 +673,7 @@ let RESOLVED = [];             // resolveRecords(rawLedger).attestations (real f
 let NOTES = [];
 let justStamped = null;        // id to animate on next render
 let newLine = -1;              // ledger line index to flash
+let evalTamper = { active:false, id:null, orig:0 };  // confidence-tab score-tamper state
 
 const AGENT = 'claude-opus-4-8/claude-code';
 const nowISO = () => new Date().toISOString();
@@ -665,6 +740,8 @@ async function render(){
   await refreshChain();                            // <-- REAL chainOf()
   renderOtel();                                    // <-- REAL span-attribute mappers
   renderSignSelect();                              // <-- ed25519 sign tab
+  renderEvalTamperSelect();                        // <-- confidence tab: score-tamper select
+  await renderConfidence();                        // <-- REAL evalCoverage() + evalOf()
   justStamped = null; newLine = -1;
 }
 
@@ -868,6 +945,95 @@ function signFallback(){
   $('sVerifyBtn').disabled = true; $('sTamperBtn').disabled = true;
 }
 
+// ---- confidence (tab 05) — REAL evalCoverage() + evalOf() ----
+function renderEvalTamperSelect(){
+  const prev = $('etSel').value;
+  const opts = RESOLVED.filter(r=>!r.revoked && r.evaluation)
+    .map(r=>`<option value="${r.id}">${shortId(r.id)} · ${esc(r.intent)} · score ${r.evaluation.score}</option>`);
+  $('etSel').innerHTML = opts.join('') || '<option value="">— no evaluated attestations —</option>';
+  if([...$('etSel').options].some(o=>o.value===prev)) $('etSel').value = prev;
+}
+async function renderConfidence(){
+  const hashes = artifacts.map(a=>a.hash);
+  const thr = +$('confThresh').value;
+  $('confThreshVal').textContent = thr.toFixed(2);
+  const rep = evalCoverage(hashes, RESOLVED, { threshold: thr });   // <-- REAL evalCoverage()
+  const mean = rep.mean_score;
+  const frac = mean===null ? 0 : mean;
+  const C = 2*Math.PI*52;
+  $('evalGaugeArc').style.strokeDashoffset = String(C*(1-frac));
+  $('evalGaugeArc').setAttribute('stroke', mean===null ? '#61708c' : (mean>=thr ? '#1f9d6b' : '#e6c15a'));
+  $('evalGaugePct').textContent = mean===null ? '—' : mean.toFixed(2);
+  $('evalLegend').innerHTML =
+    `<b>${rep.evaluated}</b> evaluated<br>`+
+    `<span class="u">${rep.unevaluated.length}</span> unevaluated<br>`+
+    `mean <b>${mean===null?'—':mean.toFixed(2)}</b> · min <b>${rep.min_score===null?'—':rep.min_score.toFixed(2)}</b><br>`+
+    `<span class="u">${rep.below.length}</span> below ${thr.toFixed(2)}`;
+
+  // per-artifact breakdown via REAL evalOf()
+  const rows = artifacts.map(a=>{
+    const claim = evalOf(a.hash, RESOLVED);                          // <-- REAL evalOf()
+    if(claim===null){
+      return `<div class="covrow"><svg width="16" height="16" style="color:var(--faint)"><use href="#ic-doc" width="16" height="16"/></svg>
+        <span class="nm" style="color:var(--faint)">${esc(a.name)}</span><span class="stamp-tag" style="color:var(--faint)">UNEVALUATED</span></div>`;
+    }
+    const below = claim.score < thr;
+    const tag = below
+      ? `<span class="stamp-tag no">${claim.score.toFixed(2)} · ${esc(claim.method)} · BELOW</span>`
+      : `<span class="stamp-tag ok">${claim.score.toFixed(2)} · ${esc(claim.method)}</span>`;
+    return `<div class="covrow ${below?'miss':''}"><svg width="16" height="16" style="color:var(--faint)"><use href="#ic-doc" width="16" height="16"/></svg>
+      <span class="nm">${esc(a.name)}</span>${tag}</div>`;
+  });
+  $('evalRows').innerHTML = rows.join('') || '<div class="ledger-empty">— no artifacts —</div>';
+}
+async function doEvalTamper(){
+  if(!evalTamper.active){
+    const id = $('etSel').value;
+    if(!id) return;
+    const raw = rawLedger.find(r=>r.id===id && r.type!=='revocation');
+    if(!raw || !raw.evaluation) return;
+    evalTamper = { active:true, id, orig: raw.evaluation.score };
+    // silently edit the hashed score in place — a tampering attempt
+    raw.evaluation.score = raw.evaluation.score < 0.9
+      ? Math.min(1, +(raw.evaluation.score + 0.3).toFixed(2))
+      : Math.max(0, +(raw.evaluation.score - 0.3).toFixed(2));
+    $('etBtn').innerHTML = '<svg width="14" height="14"><use href="#ic-check" width="14" height="14"/></svg> Restore score';
+    await render();
+    await showEvalTamperResult(id);
+  } else {
+    const id = evalTamper.id;
+    const raw = rawLedger.find(r=>r.id===id && r.type!=='revocation');
+    if(raw && raw.evaluation) raw.evaluation.score = evalTamper.orig;
+    evalTamper = { active:false, id:null, orig:0 };
+    $('etBtn').innerHTML = '<svg width="14" height="14"><use href="#ic-x" width="14" height="14"/></svg> Tamper the score';
+    await render();
+    await showEvalTamperResult(id);
+  }
+}
+async function showEvalTamperResult(id){
+  const box=$('etResult'), head=$('etHead'), body=$('etBody');
+  const raw = rawLedger.find(r=>r.id===id);
+  if(!raw){ box.className='vresult'; return; }
+  const live = RESOLVED.find(r=>r.id===id);
+  box.className = 'vresult show ' + (live?'ok':'rev');
+  if(!live){
+    const recomputed = await computeRecordId(raw);                  // <-- REAL content hash
+    const art = artifacts.find(a=>a.hash===raw.artifact);
+    let vpart = '';
+    if(art){
+      const v = verify(art.hash, RESOLVED);                         // <-- REAL verify()
+      vpart = `<br>verify(<span class="gd">${esc(art.name)}</span>) &rarr; <span class="r">${v.attested?'ATTESTED':v.revoked?'REVOKED':'UNKNOWN'}</span> — its only attestation was dropped.`;
+    }
+    head.innerHTML = `<svg width="30" height="30" style="color:var(--bad)"><use href="#ic-x" width="26" height="26" x="2" y="2"/></svg> ID / CONTENT MISMATCH`;
+    body.innerHTML = `the evaluation score was edited to <span class="r">${raw.evaluation.score}</span> in place.<br>`+
+      `stored id <span class="gd">${shortId(raw.id)}…</span> · content now hashes to <span class="r">${shortId(recomputed)}…</span><br>`+
+      `<span class="r">resolveRecords() dropped this record on read</span> — the score is part of the canonical content, so it can't be silently edited.${vpart}`;
+  } else {
+    head.innerHTML = sealSVG(false,34)+' EVALUATION INTACT';
+    body.innerHTML = `record <span class="gd">${shortId(id)}</span> — score <span class="g">${live.evaluation.score}</span> by method <span class="gd">${esc(live.evaluation.method)}</span>. It hashes to its id, folds cleanly, and the claim stands.`;
+  }
+}
+
 // ---- chain ----
 async function refreshChain(){
   const id = $('chainSel').value;
@@ -944,9 +1110,15 @@ async function doAttest(){
   const agent = $('aAgent').value.trim() || AGENT;
   const parents = $('aParent').value ? [$('aParent').value] : [];
   $('aMsg').textContent = '';
+  let evaluation;
+  if($('aEvalOn').checked){
+    evaluation = { score:+$('aEvalScore').value, method:$('aEvalMethod').value };
+    const cn = $('aCheckName').value.trim();
+    if(cn) evaluation.checks = [{ name:cn, passed:$('aCheckPassed').checked }];
+  }
   let rec;
   try{
-    rec = await attest(content, { agent, intent, parents, created: nowISO(), meta:{ path:name } });
+    rec = await attest(content, { agent, intent, parents, created: nowISO(), meta:{ path:name }, ...(evaluation?{evaluation}:{}) });
   }catch(e){ $('aMsg').style.color='var(--bad)'; $('aMsg').textContent = e.message; return; }
   // validate with the REAL schema validator before appending
   const chk = validateAttestation(rec);
@@ -1021,9 +1193,13 @@ const UTIL_JS = `export const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n
 
 async function seed(){
   const a1 = await attest(AUTH_JS, { agent:AGENT, intent:'add OAuth login flow',
-    created:'2026-07-11T09:00:00Z', meta:{ path:'src/auth.js' } });
+    created:'2026-07-11T09:00:00Z', meta:{ path:'src/auth.js' },
+    evaluation:{ score:0.62, method:'judge', evaluator:'gpt-judge',
+      checks:[{ name:'handles token refresh', passed:false, note:'no refresh path' },
+              { name:'validates state param', passed:true }] } });
   const a2 = await attest(AUTH_TEST, { agent:AGENT, intent:'add tests for the OAuth login flow',
-    parents:[a1.id], created:'2026-07-11T09:05:00Z', meta:{ path:'src/auth.test.js' } });
+    parents:[a1.id], created:'2026-07-11T09:05:00Z', meta:{ path:'src/auth.test.js' },
+    evaluation:{ score:0.95, method:'test', checks:[{ name:'unit tests pass', passed:true }] } });
   rawLedger = [a1, a2];
   artifacts = [
     { name:'src/auth.js',      content:AUTH_JS,   original:AUTH_JS,   tampered:false, hash:a1.artifact },
@@ -1035,7 +1211,7 @@ async function seed(){
 }
 
 // ---- source viewer (fetch the real files) ----
-for (const f of ['verify','id','schema']) {
+for (const f of ['verify','id','schema','evaluation']) {
   fetch('./lib/'+f+'.js').then(r=>r.text()).then(t=>{ const el=$('src-'+f); if(el) el.textContent = t; }).catch(()=>{ const el=$('src-'+f); if(el) el.textContent='(source unavailable)'; });
 }
 
@@ -1050,6 +1226,11 @@ if(!reduce) document.querySelectorAll('.statband .n').forEach(el=>{
 // ---- wire ----
 $('aContent').addEventListener('input', updateAttestFinger);
 $('aBtn').addEventListener('click', doAttest);
+$('aEvalOn').addEventListener('change', ()=>{ $('aEvalFields').style.display = $('aEvalOn').checked ? '' : 'none'; });
+$('aEvalScore').addEventListener('input', ()=>{ $('aEvalScoreVal').textContent = (+$('aEvalScore').value).toFixed(2); });
+$('confThresh').addEventListener('input', renderConfidence);
+$('etSel').addEventListener('change', ()=>{ if(!evalTamper.active) $('etResult').className='vresult'; });
+$('etBtn').addEventListener('click', doEvalTamper);
 $('chainBtn').addEventListener('click', refreshChain);
 $('chainSel').addEventListener('change', refreshChain);
 $('vSel').addEventListener('change', async ()=>{ $('vResult').className='vresult'; await updateVerifyFinger(); });

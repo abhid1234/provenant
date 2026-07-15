@@ -67,6 +67,8 @@ export async function computeRecordId(record) {
 
 // --- pure record constructors, ported from src/attest.js (throw on bad input) -
 
+import { validateEvaluation } from "./schema.js";
+
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
@@ -103,7 +105,7 @@ async function resolveArtifact(artifact) {
 // Ported from src/attest.js: same validation, same canonical field order, same
 // computeRecordId — only async because the digest is async in the browser.
 export async function attest(artifact, meta = {}) {
-  const { agent, intent, parents = [], created, meta: metaObj } = meta;
+  const { agent, intent, parents = [], created, meta: metaObj, evaluation } = meta;
 
   const artifactHash = await resolveArtifact(artifact);
 
@@ -121,7 +123,21 @@ export async function attest(artifact, meta = {}) {
   if (metaObj !== undefined && !isPlainObject(metaObj)) {
     throw new Error("attest: meta must be an object");
   }
+  // An evaluation, when given, must be a well-formed claim: validate it up front
+  // (non-throwing validator) and throw a clear error rather than hashing a
+  // malformed score into the record.
+  if (evaluation !== undefined) {
+    const res = validateEvaluation(evaluation);
+    if (!res.valid) {
+      const detail = res.errors
+        .map((e) => `${e.path === "" ? "<root>" : e.path}: ${e.message}`)
+        .join("; ");
+      throw new Error(`attest: evaluation is invalid: ${detail}`);
+    }
+  }
 
+  // `evaluation` sits with the other content, so it is covered by the content
+  // hash and any signature; omitted entirely when absent (backward-compatible).
   const record = {
     type: "attestation",
     agent,
@@ -130,6 +146,7 @@ export async function attest(artifact, meta = {}) {
     parents: [...parents],
     created,
     ...(metaObj !== undefined ? { meta: metaObj } : {}),
+    ...(evaluation !== undefined ? { evaluation } : {}),
   };
   return { id: await computeRecordId(record), ...record };
 }
