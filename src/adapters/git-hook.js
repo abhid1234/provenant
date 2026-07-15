@@ -44,16 +44,32 @@ const END = "# <<< provenant <<<";
 // rather than an error — provenance is additive, never disruptive.
 export function changedPaths(opts = {}) {
   const { cwd = process.cwd() } = opts;
+  // `-z` gives NUL-terminated, UNQUOTED paths. Without it git quotes unusual
+  // names and a filename may legally contain a newline — either of which would
+  // split/mangle a path and attest (or skip) the wrong file. Split on NUL and do
+  // NOT trim (leading/trailing spaces are valid path characters).
   const r = spawnSync(
     "git",
-    ["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "HEAD"],
+    ["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-z", "HEAD"],
     { cwd, encoding: "utf8" }
   );
   if (r.status !== 0 || typeof r.stdout !== "string") return [];
-  return r.stdout
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  return r.stdout.split("\0").filter((p) => p.length > 0);
+}
+
+// committedType(cwd, ref, rel) → the git object type of `ref:rel` ("blob",
+// "commit" for a submodule, "tree", …) or null if it doesn't exist in that tree.
+function committedType(cwd, ref, rel) {
+  const r = spawnSync("git", ["cat-file", "-t", `${ref}:${rel}`], { cwd, encoding: "utf8" });
+  return r.status === 0 && typeof r.stdout === "string" ? r.stdout.trim() : null;
+}
+
+// readCommittedBlob(cwd, ref, rel) → the committed bytes of `ref:rel` as a
+// Buffer, or null if it can't be read. Reads from the object store, NOT the
+// working tree, so a dirty file or a post-commit edit can't change what's hashed.
+function readCommittedBlob(cwd, ref, rel) {
+  const r = spawnSync("git", ["cat-file", "-p", `${ref}:${rel}`], { cwd, maxBuffer: 1 << 28 });
+  return r.status === 0 && Buffer.isBuffer(r.stdout) ? r.stdout : null;
 }
 
 // The HEAD commit's subject line — used as each attestation's `intent`.
@@ -114,15 +130,22 @@ export function attestCommit(opts = {}) {
     if (typeof p === "string") latestByPath.set(p, a.id);
   }
 
+  const ref = commit || "HEAD";
   const written = [];
   const notes = [];
   for (const rel of paths) {
-    const abs = isAbsolute(rel) ? rel : join(cwd, rel);
-    let content;
-    try {
-      content = readFileSync(abs);
-    } catch {
-      notes.push(`skipped ${rel}: unreadable (deleted in this commit?)`);
+    // Read the COMMITTED bytes from the object store — never the working tree —
+    // so a dirty file or an edit made right after the commit can't change the
+    // attested content. Skip non-blob entries (a deleted path, a submodule
+    // gitlink, or a directory) with a note instead of hashing the wrong thing.
+    const type = committedType(cwd, ref, rel);
+    if (type !== "blob") {
+      notes.push(`skipped ${rel}: not a committed file blob (${type || "absent — deleted in this commit?"})`);
+      continue;
+    }
+    const content = readCommittedBlob(cwd, ref, rel);
+    if (content === null) {
+      notes.push(`skipped ${rel}: unreadable from commit ${ref.slice(0, 8)}`);
       continue;
     }
     const parentId = latestByPath.get(rel);

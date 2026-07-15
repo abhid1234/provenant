@@ -18,7 +18,7 @@ const HEX2 = "b".repeat(64);
 
 function validAttestation(overrides = {}) {
   return {
-    id: "some-record-id",
+    id: "c".repeat(64),
     type: "attestation",
     agent: "claude-opus-4-8/claude-code",
     artifact: HEX,
@@ -31,7 +31,7 @@ function validAttestation(overrides = {}) {
 
 function validRevocation(overrides = {}) {
   return {
-    id: "some-revocation-id",
+    id: "d".repeat(64),
     type: "revocation",
     attestation_id: HEX,
     agent: "claude",
@@ -284,7 +284,7 @@ test("revocation unknown field → UNKNOWN_FIELD; non-object → NOT_OBJECT", ()
 // --- validateLedger --------------------------------------------------------
 
 test("valid array of unique-id records → valid", () => {
-  const ledger = [validAttestation({ id: "one" }), validRevocation({ id: "two" })];
+  const ledger = [validAttestation({ id: "1".repeat(64) }), validRevocation({ id: "2".repeat(64) })];
   assert.deepEqual(validateLedger(ledger), { valid: true, errors: [] });
 });
 
@@ -299,7 +299,7 @@ test("non-array input → single NOT_ARRAY", () => {
 });
 
 test("ledger dispatches revocation vs attestation by type; element paths prefixed [i]", () => {
-  const ledger = [validAttestation({ id: "one" }), validRevocation({ id: "two", at: "nope" })];
+  const ledger = [validAttestation({ id: "1".repeat(64) }), validRevocation({ id: "2".repeat(64), at: "nope" })];
   const result = validateLedger(ledger);
   assert.deepEqual(codeAt(result, "[1].at"), ["INVALID_ISO8601"]);
 });
@@ -310,7 +310,7 @@ test("ledger whole-element NOT_OBJECT path is [i]", () => {
 });
 
 test("ledger duplicate id → DUPLICATE_ID at the later occurrence only", () => {
-  const ledger = [validAttestation({ id: "dup" }), validAttestation({ id: "dup" })];
+  const ledger = [validAttestation({ id: "e".repeat(64) }), validAttestation({ id: "e".repeat(64) })];
   const result = validateLedger(ledger);
   assert.deepEqual(codeAt(result, "[1].id"), ["DUPLICATE_ID"]);
   assert.equal(codeAt(result, "[0].id").length, 0);

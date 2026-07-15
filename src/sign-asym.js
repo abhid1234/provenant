@@ -66,13 +66,19 @@ export function verifyAsym(record, publicKeyPem, signatureHex) {
   if (typeof sig !== "string" || sig.length === 0) return false;
   if (typeof publicKeyPem !== "string" || publicKeyPem.length === 0) return false;
 
+  // Require EXACTLY 128 lowercase hex chars (a 64-byte ed25519 signature) before
+  // decoding: Buffer.from(str, "hex") stops at the first invalid char, so a valid
+  // 128-char signature followed by garbage would otherwise decode to the same 64
+  // bytes and verify.
+  if (!/^[0-9a-f]{128}$/.test(sig)) return false;
+
   let sigBytes;
   try {
     sigBytes = Buffer.from(sig, "hex");
   } catch {
     return false;
   }
-  if (sigBytes.length === 0) return false;
+  if (sigBytes.length !== 64) return false;
 
   try {
     return cryptoVerify(null, preimage(record), publicKeyPem, sigBytes);

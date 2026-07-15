@@ -117,7 +117,7 @@ test("a record with an unknown type is skipped with a note", () => {
 });
 
 test("a record with no type is folded as an attestation", () => {
-  const rec = { agent: "a1", artifact: "z", intent: "w", created: T0 };
+  const rec = { agent: "a1", artifact: "a".repeat(64), intent: "w", parents: [], created: T0 };
   rec.id = computeRecordId(rec);
   const { attestations } = resolveRecords([rec]);
   assert.equal(attestations.length, 1);

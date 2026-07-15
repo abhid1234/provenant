@@ -35,6 +35,11 @@ export function sign(record, secret) {
 // timing.
 export function verifySignature(record, secret) {
   if (!record || typeof record.signature !== "string") return false;
+  // Require EXACTLY 64 lowercase hex chars first. Buffer.from(str, "hex") decodes
+  // permissively — it stops at the first invalid char — so "…<valid 64>garbage"
+  // would otherwise decode to the same 32 bytes and verify. An HMAC-sha256 hex
+  // digest is exactly 64 chars.
+  if (!/^[0-9a-f]{64}$/.test(record.signature)) return false;
   const expected = sign(record, secret);
   const a = Buffer.from(record.signature, "hex");
   const b = Buffer.from(expected, "hex");

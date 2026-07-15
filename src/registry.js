@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { validateAttestation, validateRevocation } from "./schema.js";
 
 // --- pure core -------------------------------------------------------------
 
@@ -22,8 +23,16 @@ import { dirname, join } from "node:path";
 // pre-image (and, in `sign`, the HMAC pre-image), so it does not need to
 // round-trip to a value.
 export function canonicalize(record) {
-  const { id: _id, ...rest } = record;
-  return stableStringify(rest);
+  // Exclude BOTH `id` and `signature`: a record's content hash must be stable
+  // whether or not a signature is later attached (the signature signs this very
+  // pre-image). Otherwise `sign` → `record.signature = …` would change the id and
+  // the record would drop out of the ledger on reload.
+  const { id: _id, signature: _sig, ...rest } = record;
+  // Normalize through JSON so the hash pre-image matches EXACTLY what
+  // appendRecord stores (JSON.stringify) and loadLedger reloads (JSON.parse): a
+  // value JSON drops or rewrites (a nested `undefined`, a function, a Date) would
+  // otherwise make a fresh record's id disagree with its reloaded id.
+  return stableStringify(JSON.parse(JSON.stringify(rest)));
 }
 
 function stableStringify(value) {
@@ -110,8 +119,21 @@ export function resolveRecords(records, opts = {}) {
   for (const r of valid) {
     const type = r.type == null ? "attestation" : r.type;
     if (type === "attestation") {
+      // A hash-valid record can still be structurally malformed. Validate the
+      // attestation shape before folding it, so a bad record can't poison query
+      // results or (as a revocation) revoke a real attestation.
+      const { valid: ok, errors } = validateAttestation({ ...r, type: "attestation" });
+      if (!ok) {
+        notes.push(`skipped attestation ${shortId(r.id)}: ${errors[0].code} at ${errors[0].path || "(root)"}`);
+        continue;
+      }
       attestations.set(r.id, { ...r });
     } else if (type === "revocation") {
+      const { valid: ok, errors } = validateRevocation(r);
+      if (!ok) {
+        notes.push(`skipped revocation ${shortId(r.id)}: ${errors[0].code} at ${errors[0].path || "(root)"}`);
+        continue;
+      }
       revocations.push(r);
     } else {
       notes.push(`skipped record ${shortId(r.id)}: unknown type "${r.type}"`);

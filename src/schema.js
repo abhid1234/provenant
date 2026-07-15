@@ -133,6 +133,8 @@ function checkSha256Field(errors, obj, field) {
   const v = obj[field];
   if (typeof v !== "string") {
     errors.push(err(field, ERROR_CODES.WRONG_TYPE, `${field} must be a string`));
+  } else if (v.trim().length === 0) {
+    errors.push(err(field, ERROR_CODES.EMPTY_STRING, `${field} must not be empty`));
   } else if (!SHA256_HEX.test(v)) {
     errors.push(
       err(field, ERROR_CODES.INVALID_SHA256, `${field} must be a sha256 hex digest (64 hex chars)`)
@@ -166,7 +168,7 @@ export function validateAttestation(obj) {
   }
 
   // 4. Per-field type/shape (only for fields that are present).
-  if ("id" in obj) checkStringField(errors, obj, "id");
+  if ("id" in obj) checkSha256Field(errors, obj, "id");
   if ("agent" in obj) checkStringField(errors, obj, "agent");
   if ("intent" in obj) checkStringField(errors, obj, "intent");
   if ("artifact" in obj) checkSha256Field(errors, obj, "artifact");
@@ -350,7 +352,7 @@ export function validateRevocation(obj) {
   }
 
   // 4. Per-field type/shape (only for fields that are present).
-  if ("id" in obj) checkStringField(errors, obj, "id");
+  if ("id" in obj) checkSha256Field(errors, obj, "id");
   if ("agent" in obj) checkStringField(errors, obj, "agent");
   if ("reason" in obj) checkStringField(errors, obj, "reason");
   if ("attestation_id" in obj) checkSha256Field(errors, obj, "attestation_id");
